@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>The Great Ledger - Cozy RPG Habit Tracker</title>
+  
+  <!-- PWA Setup -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ledger">
+  <link rel="apple-touch-icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📖</text></svg>">
+  
+  <!-- Cozy Fantasy Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Primary Style Sheet -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Game Shell Container -->
+  <div id="game-container" class="parchment-theme">
+    
+    <!-- Cozy Top Bar: RPG Status Banner -->
+    <header id="status-header">
+      <div class="character-basics">
+        <div class="avatar-frame">
+          <svg id="header-avatar" viewBox="0 0 100 100" class="pixel-avatar">
+            <!-- Dynamic pixel SVG avatar is injected here -->
+          </svg>
+        </div>
+        <div class="character-details">
+          <h2 id="header-char-name">Hero</h2>
+          <div class="archetype-badge" id="header-archetype">Novice</div>
+        </div>
+      </div>
+      
+      <!-- General RPG Counters -->
+      <div class="header-counters">
+        <div class="counter-item gold-counter" title="Gold Coins">
+          <span class="icon">🪙</span>
+          <span id="header-gold">0</span>
+        </div>
+        
+        <div class="counter-item step-counter" title="Lifetime Steps">
+          <span class="icon">👣</span>
+          <span id="header-steps">0</span>
+        </div>
+        
+        <div class="counter-item total-level-badge" title="Character Level (Weighted OSRS skills)">
+          <span class="level-label">CHAR Lvl</span>
+          <span id="header-total-level">10</span>
+        </div>
+
+      </div>
+
+      <!-- Flame Momentum Meter -->
+      <div id="flame-meter-container" title="Consistency Flame Multiplier">
+        <div class="flame-meter-track">
+          <div id="flame-meter-fill"></div>
+        </div>
+        <div class="flame-meter-stats">
+          <span class="flame-icon">🔥</span>
+          <span id="flame-multiplier">1.0x</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Viewport: Where modular screen binders render -->
+    <main id="app-viewport" class="scroll-container">
+      <!-- Screen content gets dynamically injected here -->
+    </main>
+
+    <!-- Sticky Bottom Navigation: Optimized for easy thumb-reach -->
+    <nav id="bottom-navigation">
+      <button class="nav-tab active" id="tab-quests" data-screen="quests">
+        <span class="nav-icon">📜</span>
+        <span class="nav-label">Bounties</span>
+      </button>
+      
+      <button class="nav-tab" id="tab-world" data-screen="world">
+        <span class="nav-icon">🗺️</span>
+        <span class="nav-label">Journey</span>
+      </button>
+      
+      <button class="nav-tab" id="tab-character" data-screen="character">
+        <span class="nav-icon">🛡️</span>
+        <span class="nav-label">Hero Sheet</span>
+      </button>
+    </nav>
+    
+  </div>
+
+  <!-- Global error trap - catches module parse/load failures -->
+  <script>
+    window.addEventListener('error', function(e) {
+      var vp = document.getElementById('app-viewport');
+      if (vp) {
+        vp.innerHTML = '<div style="padding:20px;color:darkred;background:#fff3f3;font-size:0.72rem;word-break:break-all;border:2px solid red;margin:8px;border-radius:6px;"><strong>LOAD ERROR:</strong><br>' + (e.message || '') + '<br><em>' + (e.filename || '') + ' line ' + (e.lineno || '') + '</em></div>';
+      }
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      var vp = document.getElementById('app-viewport');
+      if (vp) {
+        vp.innerHTML = '<div style="padding:20px;color:darkred;background:#fff3f3;font-size:0.72rem;word-break:break-all;border:2px solid red;margin:8px;border-radius:6px;"><strong>PROMISE ERROR:</strong><br>' + (e.reason || '') + '</div>';
+      }
+    });
+  </script>
+
+  <!-- Central JS Module App Initializer -->
+  <script type="module" src="src/app.js"></script>
+  
+  <!-- Register Service Worker for PWA -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('sw.js').then(function(registration) {
+          console.log('ServiceWorker registration successful with scope: ', registration.scope);
+        }, function(err) {
+          console.log('ServiceWorker registration failed: ', err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "The Great Ledger",
+  "short_name": "Ledger",
+  "description": "Gamified productivity RPG",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#2c251e",
+  "theme_color": "#cca65a",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📖</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
