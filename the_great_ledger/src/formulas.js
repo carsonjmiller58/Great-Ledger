@@ -32,7 +32,29 @@ export function levelForXp(xp) {
 }
 
 /**
+ * Calculates Character Level based on OSRS skills with extra weight on the highest skill.
+ * Formula: maxSkill * 0.5 + sum(otherSkills) * 0.15
+ */
+export function calculateCharacterLevel(skillsLevels) {
+  const levels = Object.values(skillsLevels);
+  if (levels.length === 0) return 1;
+  const maxSkill = Math.max(...levels);
+  const sumOthers = levels.reduce((a, b) => a + b, 0) - maxSkill;
+  return Math.max(1, Math.floor(maxSkill * 0.5 + sumOthers * 0.15));
+}
+
+export const WEAPON_PRESETS = {
+  blade: { name: "Broad Sword", key: "blade", range: 1, attack: 5, damage: 2, icon: "⚔️", desc: "Melee. Flat accuracy rating." },
+  axe: { name: "Battle Axe", key: "axe", range: 1, attack: 2, damage: 6, icon: "🪓", desc: "Melee. Heavy physical damage." },
+  spear: { name: "Pike Spear", key: "spear", range: 2, attack: 4, damage: 3, icon: "🔱", desc: "Polearm. Balance and reach." },
+  dagger: { name: "Hunting Bow", key: "dagger", range: 5, attack: 6, damage: 1, icon: "🏹", desc: "Ranged. High agility crit rate." },
+  staff: { name: "Wisdom Staff", key: "staff", range: 5, attack: 3, damage: 4, icon: "🪄", desc: "Ranged magic. Spell power scaling." },
+  focus: { name: "Insight Orb", key: "focus", range: 5, attack: 2, damage: 2, icon: "🔮", desc: "Ranged magic. Crit multipliers." }
+};
+
+/**
  * Calculates current weapon rank based on cumulative Weapon XP.
+
  * Maximum rank is 20. Rank 1 starts at 0 XP.
  */
 export function weaponRankForXp(xp) {
@@ -68,14 +90,15 @@ export function getWeaponMasteryDetails(xp) {
 export function getWeaponMasteryKey(itemName) {
   if (!itemName) return null;
   const name = itemName.toLowerCase();
-  if (name.includes("sword") || name.includes("scimitar") || name.includes("blade")) return "blade";
-  if (name.includes("axe")) return "axe";
-  if (name.includes("spear") || name.includes("halberd") || name.includes("pike")) return "spear";
-  if (name.includes("dagger") || name.includes("knife") || name.includes("bow")) return "dagger";
-  if (name.includes("staff") || name.includes("wand") || name.includes("scepter")) return "staff";
-  if (name.includes("orb") || name.includes("book") || name.includes("focus")) return "focus";
+  if (name === "blade" || name.includes("sword") || name.includes("scimitar") || name.includes("blade")) return "blade";
+  if (name === "axe" || name.includes("axe")) return "axe";
+  if (name === "spear" || name.includes("spear") || name.includes("halberd") || name.includes("pike")) return "spear";
+  if (name === "dagger" || name.includes("dagger") || name.includes("knife") || name.includes("bow")) return "dagger";
+  if (name === "staff" || name.includes("staff") || name.includes("wand") || name.includes("scepter")) return "staff";
+  if (name === "focus" || name.includes("orb") || name.includes("book") || name.includes("focus")) return "focus";
   return "blade";
 }
+
 
 /* ==========================================================================
    Archetype Similarity Vector Resolver (7-Dimensional Cosine Similarity)
@@ -128,6 +151,23 @@ function cosineSimilarity(vecA, vecB) {
   if (normA === 0 || normB === 0) return 0;
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
+
+/* ==========================================================================
+   Destiny Paths & Classes
+   ========================================================================== */
+
+export const CLASS_PATHS = [
+  { name: "Commoner", tier: 1, reqs: {}, desc: "Free unlock", ability: "Jack of All Trades: Balanced baseline." },
+  { name: "Wanderer", tier: 1, reqs: {}, desc: "Free unlock", ability: "Swift Stride: Faster exploration." },
+  { name: "Street Rat", tier: 1, reqs: {}, desc: "Free unlock", ability: "Evasion: Chance to dodge." },
+  { name: "Fighter", tier: 2, reqs: { strength: 10, vitality: 5 }, desc: "Req: Strength 10, Vitality 5", ability: "Cleave: +2 Attack, +1 Damage." },
+  { name: "Rogue", tier: 2, reqs: { agility: 10, insight: 5 }, desc: "Req: Agility 10, Insight 5", ability: "Precision Strike: +1 Attack." },
+  { name: "Mage", tier: 2, reqs: { intelligence: 10, wisdom: 5 }, desc: "Req: Intelligence 10, Wisdom 5", ability: "Arcane Focus: +3 Damage." },
+  { name: "Paladin", tier: 3, reqs: { level: 20 }, desc: "Req: Character Lvl 20", ability: "Holy Aegis: +4 Armor, +15 Max HP." },
+  { name: "Warden", tier: 3, reqs: { level: 20 }, desc: "Req: Character Lvl 20", ability: "Nature's Guard: +5 Armor, +20 Max HP." },
+  { name: "Warlord", tier: 4, reqs: { level: 40 }, desc: "Req: Character Lvl 40", ability: "Tactical Command: +5 Attack, +3 Damage, +2 Armor." },
+  { name: "God-Warrior", tier: 5, reqs: { level: 75 }, desc: "Req: Character Lvl 75", ability: "Ascension: Massive stat boosts across all combat metrics." }
+];
 
 /* ==========================================================================
    Dungeon Data Config & Encounter Registry

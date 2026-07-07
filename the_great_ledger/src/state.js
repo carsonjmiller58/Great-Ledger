@@ -1,4 +1,23 @@
-import { levelForXp, calculateArchetype, xpForLevel, weaponRankForXp, getWeaponMasteryKey, generateProceduralLoot } from './formulas.js';
+import { levelForXp, calculateArchetype, xpForLevel, weaponRankForXp, getWeaponMasteryKey, calculateCharacterLevel, WEAPON_PRESETS, CLASS_PATHS } from './formulas.js';
+
+export const ARMOR_TIERS = [
+  "Rags",
+  "Novice Leather",
+  "Reinforced Leather",
+  "Hardened Mail",
+  "Reinforced Plate",
+  "Hardened Steel",
+  "Runed Aegis",
+  "Chrono Ward",
+  "Sovereign Plate",
+  "Celestial Bulwark"
+];
+
+export function getArmorForgeUpgradeCost(level) {
+  const costs = [0, 50, 150, 300, 500, 800, 1200, 1800, 2500, 4000];
+  if (level >= 10) return Infinity;
+  return costs[level] || 5000;
+}
 
 // Global game save key
 const SAVE_KEY = 'the_great_ledger_epic_save';
@@ -8,11 +27,20 @@ let state = {
   profile: {
     name: 'Hero Knight',
     archetype: 'Novice',
-    totalLevel: 7,
+    totalLevel: 1, // Will represent Character Level
     gold: 250,
     steps: 0,
     momentum: 50, // 0 to 100
-    lastUpdate: Date.now()
+    lastUpdate: Date.now(),
+    setupComplete: false,
+    lastResetDate: null,
+    lastWeeklyResetDate: null,
+    weeklyStats: { questsCompleted: 0, skillsLeveled: [], streaksMaintained: 0 },
+    lastWeekSummary: null,
+    hasPendingWeeklySummary: false,
+    chronicleLog: [
+      { text: "📜 Joined the guild and signed the Great Ledger.", time: Date.now() }
+    ]
   },
   skills: {
     strength: 0,
@@ -24,7 +52,7 @@ let state = {
     charisma: 0,
     cleaning: 0
   },
-  inventory: {
+  inventory: { // Kept for stub compatibility
     equipped: {
       helmet: null,
       chestArmor: null,
@@ -42,6 +70,8 @@ let state = {
       type: 'daily',
       mappedSkill: 'strength',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 30,
       baseGold: 15
     },
@@ -51,6 +81,8 @@ let state = {
       type: 'daily',
       mappedSkill: 'agility',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 30,
       baseGold: 15
     },
@@ -60,6 +92,8 @@ let state = {
       type: 'daily',
       mappedSkill: 'wisdom',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 45,
       baseGold: 20
     },
@@ -69,6 +103,8 @@ let state = {
       type: 'daily',
       mappedSkill: 'intelligence',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 45,
       baseGold: 20
     },
@@ -78,6 +114,8 @@ let state = {
       type: 'daily',
       mappedSkill: 'insight',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 30,
       baseGold: 12
     },
@@ -87,6 +125,8 @@ let state = {
       type: 'daily',
       mappedSkill: 'vitality',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 40,
       baseGold: 10
     },
@@ -96,6 +136,8 @@ let state = {
       type: 'weekly',
       mappedSkill: 'charisma',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 100,
       baseGold: 60
     },
@@ -105,6 +147,8 @@ let state = {
       type: 'daily',
       mappedSkill: 'cleaning',
       completedCount: 0,
+      currentStreak: 0,
+      lastCompletedDate: null,
       baseXP: 35,
       baseGold: 15
     }
@@ -116,11 +160,16 @@ let state = {
     totalDuration: 0, // milliseconds
     stageIndex: 0,
     logs: [],
-    rewardsGained: { gold: 0, xp: 0, items: [] }
+    rewardsGained: { gold: 0, xp: 0, essence: 0, coreFragments: 0, relicShards: 0 }
   },
   progression: {
     currentClass: "Commoner",
-    equippedCore: "Iron",
+    equippedWeapon: "blade",
+    armorForge: {
+      level: 1,
+      essenceInvested: 0
+    },
+    equippedCore: "Iron", // kept for backward compatibility
     coreRanks: {
       Iron: 1, Leather: 1, Scholar: 1, Warrior: 1,
       Vanguard: 0, Mirage: 0, Executioner: 0, Oracle: 0,
@@ -146,6 +195,7 @@ let state = {
   }
 };
 
+
 // Listeners queue for reactivity
 const listeners = new Set();
 
@@ -157,6 +207,14 @@ export function subscribe(fn) {
 function notify() {
   saveState();
   listeners.forEach(fn => fn());
+}
+
+function getISOWeek(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1) / 7) + "-" + d.getUTCFullYear();
 }
 
 /* ==========================================================================
@@ -175,11 +233,18 @@ export function loadState() {
       state.quests = parsed.quests || state.quests;
       state.expedition = { ...state.expedition, ...parsed.expedition };
       
+      // Ensure chronicle exists
+      state.profile.chronicleLog = state.profile.chronicleLog || [
+        { text: "📜 Joined the guild and signed the Great Ledger.", time: Date.now() }
+      ];
+      
       // Deep merge progression to prevent breaking older save versions
       if (parsed.progression) {
         state.progression = {
           ...state.progression,
           ...parsed.progression,
+          armorForge: parsed.progression.armorForge || { level: 1, essenceInvested: 0 },
+          equippedWeapon: parsed.progression.equippedWeapon || "blade",
           coreRanks: { ...state.progression.coreRanks, ...parsed.progression.coreRanks },
           weaponXP: { ...state.progression.weaponXP, ...parsed.progression.weaponXP },
           weaponAffinities: { ...state.progression.weaponAffinities, ...parsed.progression.weaponAffinities },
@@ -195,6 +260,47 @@ export function loadState() {
         state.profile.lastLoginDate = todayStr;
         state.profile.hasPendingLoginBonus = true; // Claim tribute on boot!
       }
+      
+      // Existing saves always skip onboarding — they already have name/class chosen
+      state.profile.setupComplete = true;
+      if (!state.profile.weeklyStats) state.profile.weeklyStats = { questsCompleted: 0, skillsLeveled: [], streaksMaintained: 0 };
+      
+      const isoWeekStr = getISOWeek(now);
+      
+      // Daily Reset Check
+      if (state.profile.lastResetDate !== todayStr) {
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        const yesterdayStr = `${yesterday.getFullYear()}-${yesterday.getMonth()}-${yesterday.getDate()}`;
+        
+        state.quests.forEach(q => {
+          if (q.currentStreak === undefined) q.currentStreak = 0;
+          if (q.type === 'daily') {
+            q.completedCount = 0;
+            if (q.lastCompletedDate !== todayStr && q.lastCompletedDate !== yesterdayStr) {
+              q.currentStreak = 0; // Streak broken
+            }
+          }
+        });
+        state.profile.lastResetDate = todayStr;
+      }
+      
+      // Weekly Reset Check
+      if (state.profile.lastWeeklyResetDate !== isoWeekStr) {
+        if (state.profile.lastWeeklyResetDate !== null && state.profile.lastWeeklyResetDate !== undefined) {
+          state.profile.lastWeekSummary = { ...state.profile.weeklyStats };
+          state.profile.hasPendingWeeklySummary = true;
+        }
+        state.profile.weeklyStats = { questsCompleted: 0, skillsLeveled: [], streaksMaintained: 0 };
+        state.profile.lastWeeklyResetDate = isoWeekStr;
+        
+        state.quests.forEach(q => {
+          if (q.type === 'weekly') {
+            q.completedCount = 0;
+          }
+        });
+      }
+
       
       recalculateDerivedStats();
     } else {
@@ -243,14 +349,11 @@ export function getDerivedStats() {
 function recalculateDerivedStats() {
   // 1. Calculate Individual Skills Levels
   const skillLevels = {};
-  let totalLevelSum = 0;
   for (const [skill, xp] of Object.entries(state.skills)) {
-    const lvl = levelForXp(xp);
-    skillLevels[skill] = lvl;
-    totalLevelSum += lvl;
+    skillLevels[skill] = levelForXp(xp);
   }
   derivedStats.skillsLevels = skillLevels;
-  state.profile.totalLevel = totalLevelSum;
+  state.profile.totalLevel = calculateCharacterLevel(skillLevels); // Character Level!
 
   // 2. Resolve Archetype
   const statsArray = [
@@ -265,24 +368,17 @@ function recalculateDerivedStats() {
   ];
   state.profile.archetype = calculateArchetype(statsArray);
 
-  // 3. Derived Combat Values based on Level + Equipment
-  const overallLvl = Math.floor(totalLevelSum / 5) + 1; // Core scaling factor
-  const gear = state.inventory.equipped;
-
-  const attBonus = (gear.mainHand?.stats.attack || 0) + (gear.gloves?.stats.attack || 0);
-  const defBonus = (gear.chestArmor?.stats.defense || 0) + 
-                   (gear.helmet?.stats.defense || 0) + 
-                   (gear.offHand?.stats.defense || 0) + 
-                   (gear.boots?.stats.defense || 0);
-                   
+  // 3. Derived Combat Values based on Level
+  const overallLvl = state.profile.totalLevel; 
+  
   const strengthLvl = skillLevels.strength;
   const vitalityLvl = skillLevels.vitality;
 
-  // 4. Incorporate Armor Core progression, Relics, and Weapon Masteries
+  // 4. Incorporate Armor Forge level, Relics, and Weapon Masteries
   const prog = state.progression || {
     currentClass: "Commoner",
-    equippedCore: "Iron",
-    coreRanks: { Iron: 1 },
+    equippedWeapon: "blade",
+    armorForge: { level: 1, essenceInvested: 0 },
     equippedRelic: null,
     weaponXP: { blade: 0, axe: 0, spear: 0, dagger: 0, staff: 0, focus: 0 },
     monsterCodex: {}
@@ -301,19 +397,9 @@ function recalculateDerivedStats() {
   else if (prog.currentClass === "Rogue") { classAtt += 1; }
   else if (prog.currentClass === "Warden") { classDef += 5; classHp += 20; }
 
-  // Core stats
-  let coreAtt = 0;
-  let coreDef = 0;
-  let coreHp = 0;
-  let coreDmg = 0;
-  const coreRank = prog.coreRanks[prog.equippedCore] || 0;
-  if (prog.equippedCore === "Iron") { coreDef += coreRank * 1; }
-  else if (prog.equippedCore === "Warrior") { coreAtt += coreRank * 1; }
-  else if (prog.equippedCore === "Scholar") { coreDef += Math.floor(coreRank / 2); }
-  else if (prog.equippedCore === "Vanguard") { coreDef += coreRank * 1; coreHp += coreRank * 2; }
-  else if (prog.equippedCore === "Juggernaut") { coreHp += coreRank * 4; coreDef += coreRank * 1; }
-  else if (prog.equippedCore === "Sovereign") { coreAtt += coreRank * 2; coreDef += coreRank * 2; coreDmg += Math.floor(coreRank / 2); }
-  else if (prog.equippedCore === "Ascendant") { coreAtt += coreRank * 3; coreDef += coreRank * 3; coreHp += coreRank * 5; }
+  // Armor Forge flat defense calculation: each level provides +15 armor (base 0 for Level 1)
+  const forgeLvl = prog.armorForge?.level || 1;
+  const forgeDef = (forgeLvl - 1) * 15;
 
   // Relic stats
   let relicAtt = 0;
@@ -342,10 +428,11 @@ function recalculateDerivedStats() {
   // Weapon mastery stats
   let weaponAtt = 0;
   let weaponDmg = 0;
-  const equippedWeaponName = gear.mainHand ? gear.mainHand.name : "";
-  const weaponKey = getWeaponMasteryKey(equippedWeaponName);
-  if (weaponKey) {
-    const wXp = prog.weaponXP[weaponKey] || 0;
+  const activeWeaponKey = prog.equippedWeapon || "blade";
+  const weaponPreset = WEAPON_PRESETS[activeWeaponKey];
+  
+  if (activeWeaponKey) {
+    const wXp = prog.weaponXP[activeWeaponKey] || 0;
     const wRank = weaponRankForXp(wXp);
     // Accuracy
     weaponAtt += Math.floor(wRank * 0.4);
@@ -354,20 +441,45 @@ function recalculateDerivedStats() {
     else if (wRank >= 15) weaponDmg += 3;
     else if (wRank >= 10) weaponDmg += 2;
     else if (wRank >= 5) weaponDmg += 1;
+
+    // Add Preset Weapon base stats
+    if (weaponPreset) {
+      weaponAtt += weaponPreset.attack;
+      weaponDmg += weaponPreset.damage;
+    }
   }
 
-  derivedStats.combatStats.attack = overallLvl + Math.floor(strengthLvl / 3) + attBonus + classAtt + coreAtt + relicAtt + weaponAtt;
-  derivedStats.combatStats.defense = overallLvl + Math.floor(vitalityLvl / 4) + defBonus + classDef + coreDef + relicDef + codexDef;
-  derivedStats.combatStats.damageRange = 6 + Math.floor(strengthLvl / 2) + (gear.mainHand?.stats.attack || 0) + classDmg + coreDmg + relicDmg + codexDmg + weaponDmg;
-  derivedStats.combatStats.maxHP = 25 + (overallLvl * 3) + (vitalityLvl * 4) + classHp + coreHp + relicHp;
+  derivedStats.combatStats.attack = overallLvl + Math.floor(strengthLvl / 3) + classAtt + relicAtt + weaponAtt;
+  derivedStats.combatStats.defense = overallLvl + Math.floor(vitalityLvl / 4) + classDef + forgeDef + relicDef + codexDef;
+  derivedStats.combatStats.damageRange = 6 + Math.floor(strengthLvl / 2) + classDmg + relicDmg + codexDmg + weaponDmg;
+  derivedStats.combatStats.maxHP = 25 + (overallLvl * 3) + (vitalityLvl * 4) + classHp + relicHp;
 
   // Auto-heal to max if not in active combat
   if (!state.expedition.active) {
     derivedStats.currentHP = derivedStats.combatStats.maxHP;
   } else {
-    // Keep HP bounded by new limits
     derivedStats.currentHP = Math.min(derivedStats.currentHP, derivedStats.combatStats.maxHP);
   }
+}
+
+/* ==========================================================================
+   Momentum System
+   ========================================================================== */
+
+/**
+ * Returns the XP/Gold multiplier based on current momentum (0-100).
+ * 0% momentum = 0.5x, 50% = 1.0x, 100% = 2.0x
+ */
+export function getMomentumMultiplier() {
+  const m = state.profile.momentum || 0;
+  return (0.5 + (m / 100) * 1.5).toFixed(1);
+}
+
+/**
+ * Changes momentum by a delta (clamped 0–100).
+ */
+function changeMomentum(delta) {
+  state.profile.momentum = Math.max(0, Math.min(100, state.profile.momentum + delta));
 }
 
 /* ==========================================================================
@@ -386,21 +498,16 @@ export function addSteps(amount) {
 /**
  * Momentum Decay & Consistency Updates
  */
-export function changeMomentum(delta) {
-  state.profile.momentum = Math.min(100, Math.max(0, state.profile.momentum + delta));
-  notify();
-}
-
 /**
- * Custom formula mapping momentum values directly to flame multipliers.
- * Exponential-style bonus: 50 is 1.0x. 100 is 2.0x. 0 is 0.5x.
+ * Helper to log character events to the chronicle history
  */
-export function getMomentumMultiplier() {
-  const m = state.profile.momentum;
-  if (m >= 50) {
-    return (1.0 + ((m - 50) / 50)).toFixed(1); // 1.0x to 2.0x
-  } else {
-    return (0.5 + (m / 100)).toFixed(1); // 0.5x to 1.0x
+export function addChronicleEvent(text) {
+  if (!state.profile.chronicleLog) {
+    state.profile.chronicleLog = [];
+  }
+  state.profile.chronicleLog.unshift({ text, time: Date.now() });
+  if (state.profile.chronicleLog.length > 50) {
+    state.profile.chronicleLog.pop();
   }
 }
 
@@ -412,6 +519,27 @@ export function completeQuest(questId) {
   if (!quest) return null;
 
   quest.completedCount++;
+  
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const yesterdayStr = `${yesterday.getFullYear()}-${yesterday.getMonth()}-${yesterday.getDate()}`;
+  
+  if (quest.type === 'daily') {
+    if (quest.lastCompletedDate === yesterdayStr) {
+      quest.currentStreak++;
+      if (state.profile.weeklyStats) state.profile.weeklyStats.streaksMaintained++;
+    } else if (quest.lastCompletedDate !== todayStr) {
+      quest.currentStreak = 1;
+    }
+    quest.lastCompletedDate = todayStr;
+  }
+  
+  if (state.profile.weeklyStats) {
+    state.profile.weeklyStats.questsCompleted++;
+  }
 
   // Record pre-levels to compare
   const oldLvlSum = state.profile.totalLevel;
@@ -453,6 +581,9 @@ export function completeQuest(questId) {
   // Boost flame consistency meter
   changeMomentum(8);
 
+  const eventMsg = `Completed Bounty: ${quest.text} (+${xpReward} XP to ${quest.mappedSkill.toUpperCase()}, +${goldReward} Gold)`;
+  addChronicleEvent(eventMsg);
+
   // Check for level ups!
   checkForLevelUps(oldLvlSum, oldSkillsLevels, oldCombatStats);
 
@@ -471,60 +602,105 @@ export function createCustomQuest(text, type, skill) {
     type: type === 'onetime' ? 'weekly' : type, // Internally map one-time bounties to the weekly checklist
     mappedSkill: skill,
     completedCount: 0,
+    currentStreak: 0,
+    lastCompletedDate: null,
     baseXP: type === 'daily' ? 35 : type === 'weekly' ? 90 : 150, // Higher yield for one-time
     baseGold: type === 'daily' ? 15 : type === 'weekly' ? 45 : 75,
     isOneTime: type === 'onetime'
   };
   state.quests.push(newQuest);
+  addChronicleEvent(`🖋️ Posted custom bounty: "${text}"`);
   notify();
 }
 
 /**
- * Equipment Inventories Management
+ * Generates a special quest to help reach the next class upgrade.
  */
-export function equipItem(itemId) {
-  const backpackIndex = state.inventory.backpack.findIndex(item => item.id === itemId);
-  if (backpackIndex === -1) return;
+export function generateUpgradeQuest() {
+  const derived = getDerivedStats();
+  const currentLvl = state.profile.totalLevel;
+  
+  let targetSkill = 'strength'; // Default fallback
+  let missingReq = null;
+  let targetClassName = '';
 
-  const item = state.inventory.backpack[backpackIndex];
-  const slot = item.slot;
-
-  // Retrieve current equipped item in that slot
-  const currentlyEquipped = state.inventory.equipped[slot];
-
-  // Equip new item
-  state.inventory.equipped[slot] = item;
-
-  // Swap to backpack or remove
-  if (currentlyEquipped) {
-    state.inventory.backpack[backpackIndex] = currentlyEquipped;
-  } else {
-    state.inventory.backpack.splice(backpackIndex, 1);
+  // Find the first locked class
+  for (const c of CLASS_PATHS) {
+    if (Object.keys(c.reqs).length === 0) continue;
+    
+    let hasAllReqs = true;
+    for (const [key, reqVal] of Object.entries(c.reqs)) {
+      if (key === 'level') {
+        if (currentLvl < reqVal) {
+          hasAllReqs = false;
+          missingReq = { key, reqVal, current: currentLvl };
+          break;
+        }
+      } else {
+        const val = derived.skillsLevels[key] || 1;
+        if (val < reqVal) {
+          hasAllReqs = false;
+          missingReq = { key, reqVal, current: val };
+          break;
+        }
+      }
+    }
+    
+    if (!hasAllReqs && missingReq) {
+      targetClassName = c.name;
+      break;
+    }
   }
 
+  if (!missingReq) {
+    // If all classes unlocked, just boost the lowest skill
+    const skills = Object.entries(derived.skillsLevels);
+    skills.sort((a, b) => a[1] - b[1]);
+    targetSkill = skills[0][0];
+  } else {
+    if (missingReq.key === 'level') {
+      // Pick highest skill to maximize character level formula (maxSkill * 0.5 + others * 0.15)
+      const skills = Object.entries(derived.skillsLevels);
+      skills.sort((a, b) => b[1] - a[1]);
+      targetSkill = skills[0][0];
+    } else {
+      targetSkill = missingReq.key;
+    }
+  }
+
+  const text = `Class Training: ${targetClassName ? `Path to ${targetClassName}` : 'Mastery Pursuit'}`;
+  
+  const newQuest = {
+    id: `quest-${Date.now()}`,
+    text,
+    type: 'weekly', // Treated as a one-time bounty
+    mappedSkill: targetSkill,
+    completedCount: 0,
+    currentStreak: 0,
+    lastCompletedDate: null,
+    baseXP: 300, // Large EXP bonus for class progression
+    baseGold: 100,
+    isOneTime: true
+  };
+  state.quests.push(newQuest);
+  addChronicleEvent(`🎯 New Class Upgrade Quest Generated: "${text}"`);
+  notify();
+}
+
+/**
+ * Equipment Inventories Management (Stubs for compatibility)
+ */
+export function equipItem(itemId) {
   recalculateDerivedStats();
   notify();
 }
 
 export function unequipItem(slot) {
-  const item = state.inventory.equipped[slot];
-  if (!item) return;
-
-  state.inventory.equipped[slot] = null;
-  state.inventory.backpack.push(item);
-
   recalculateDerivedStats();
   notify();
 }
 
 export function sellItem(itemId) {
-  const index = state.inventory.backpack.findIndex(item => item.id === itemId);
-  if (index === -1) return;
-
-  const item = state.inventory.backpack[index];
-  state.profile.gold += item.goldValue;
-  state.inventory.backpack.splice(index, 1);
-
   notify();
 }
 
@@ -538,6 +714,7 @@ export function buyMomentumRecovery() {
   state.profile.gold -= cost;
   state.profile.momentum = Math.min(100, state.profile.momentum + 35);
   
+  addChronicleEvent(`🔥 Recovered consistency flame (spent ${cost} Gold)`);
   notify();
   return true;
 }
@@ -554,8 +731,10 @@ export function startExpedition(dungeonId) {
     totalDuration: 0,
     stageIndex: 0,
     logs: [`🌲 Embarked into the depths! Let your focus guide your blades...`],
-    rewardsGained: { gold: 0, xp: 0, items: [] }
+    rewardsGained: { gold: 0, xp: 0, essence: 0, coreFragments: 0, relicShards: 0 },
+    bankedRewards: { gold: 0, xp: 0, essence: 0, coreFragments: 0, relicShards: 0 }
   };
+  addChronicleEvent(`🗺️ Embarked on dungeon expedition into ${dungeonId.toUpperCase()}!`);
   recalculateDerivedStats();
   notify();
 }
@@ -573,12 +752,24 @@ export function completeExpedition() {
   
   // Distribute XP to Strength (combat) and Agility/Wisdom based on dungeon
   const xp = state.expedition.rewardsGained.xp;
+  state.profile.gold += state.expedition.rewardsGained.gold;
   state.skills.strength += Math.floor(xp * 0.5);
   state.skills.vitality += Math.floor(xp * 0.3);
   state.skills.agility += Math.floor(xp * 0.2);
 
-  // Put loot items into backpack
-  state.inventory.backpack.push(...state.expedition.rewardsGained.items);
+  // Add materials rewards
+  state.progression.materials.essence += state.expedition.rewardsGained.essence || 0;
+  state.progression.materials.coreFragments += state.expedition.rewardsGained.coreFragments || 0;
+  state.progression.materials.relicShards += state.expedition.rewardsGained.relicShards || 0;
+
+  // Combine with banked for final report
+  state.expedition.rewardsGained.gold += state.expedition.bankedRewards?.gold || 0;
+  state.expedition.rewardsGained.xp += state.expedition.bankedRewards?.xp || 0;
+  state.expedition.rewardsGained.essence = (state.expedition.rewardsGained.essence || 0) + (state.expedition.bankedRewards?.essence || 0);
+  state.expedition.rewardsGained.coreFragments = (state.expedition.rewardsGained.coreFragments || 0) + (state.expedition.bankedRewards?.coreFragments || 0);
+  state.expedition.rewardsGained.relicShards = (state.expedition.rewardsGained.relicShards || 0) + (state.expedition.bankedRewards?.relicShards || 0);
+
+  addChronicleEvent(`🏆 Expedition Cleared: +${state.expedition.rewardsGained.xp} total combat XP, +${state.expedition.rewardsGained.gold} Gold, +${state.expedition.rewardsGained.essence || 0} Essence!`);
 
   // Close expedition
   state.expedition.active = false;
@@ -591,10 +782,29 @@ export function completeExpedition() {
 export function terminateExpeditionGracefully(message) {
   if (!state.expedition.active) return;
   
-  // Interrupted! Preserve 35% of gold/xp rewards, drop all items found.
-  state.profile.gold += Math.floor(state.expedition.rewardsGained.gold * 0.35);
-  state.skills.strength += Math.floor(state.expedition.rewardsGained.xp * 0.15);
+  // Interrupted! Preserve 35% of UNBANKED gold/xp/materials rewards
+  const gGain = Math.floor(state.expedition.rewardsGained.gold * 0.35);
+  const xpGain = Math.floor(state.expedition.rewardsGained.xp * 0.15);
+  const essGain = Math.floor((state.expedition.rewardsGained.essence || 0) * 0.35);
+  const fragGain = Math.floor((state.expedition.rewardsGained.coreFragments || 0) * 0.35);
+  const relicGain = Math.floor((state.expedition.rewardsGained.relicShards || 0) * 0.35);
   
+  state.profile.gold += gGain;
+  state.skills.strength += xpGain;
+  state.progression.materials.essence += essGain;
+  state.progression.materials.coreFragments += fragGain;
+  state.progression.materials.relicShards += relicGain;
+
+  // Combine penalized + banked so the report shows exactly what the user walked away with
+  const banked = state.expedition.bankedRewards || { gold: 0, xp: 0, essence: 0, coreFragments: 0, relicShards: 0 };
+  state.expedition.rewardsGained.gold = gGain + banked.gold;
+  state.expedition.rewardsGained.xp = xpGain + banked.xp;
+  state.expedition.rewardsGained.essence = essGain + banked.essence;
+  state.expedition.rewardsGained.coreFragments = fragGain + banked.coreFragments;
+  state.expedition.rewardsGained.relicShards = relicGain + banked.relicShards;
+
+  addChronicleEvent(`💔 Expedition Aborted: Walked away with ${state.expedition.rewardsGained.gold} total Gold and ${state.expedition.rewardsGained.xp} XP.`);
+
   state.expedition.active = false;
   state.expedition.dungeonId = null;
 
@@ -611,7 +821,34 @@ export function updateActiveExpedition(updateFn) {
   notify();
 }
 
+export function bankExpeditionSpoils() {
+  if (!state.expedition.active) return;
+  const rewards = state.expedition.rewardsGained;
+  
+  state.profile.gold += rewards.gold;
+  const xp = rewards.xp;
+  state.skills.strength += Math.floor(xp * 0.5);
+  state.skills.vitality += Math.floor(xp * 0.3);
+  state.skills.agility += Math.floor(xp * 0.2);
+
+  state.progression.materials.essence += rewards.essence || 0;
+  state.progression.materials.coreFragments += rewards.coreFragments || 0;
+  state.progression.materials.relicShards += rewards.relicShards || 0;
+
+  state.expedition.bankedRewards.gold += rewards.gold;
+  state.expedition.bankedRewards.xp += rewards.xp;
+  state.expedition.bankedRewards.essence += rewards.essence || 0;
+  state.expedition.bankedRewards.coreFragments += rewards.coreFragments || 0;
+  state.expedition.bankedRewards.relicShards += rewards.relicShards || 0;
+
+  state.expedition.rewardsGained = { gold: 0, xp: 0, essence: 0, coreFragments: 0, relicShards: 0 };
+}
+
 export function deleteQuest(questId) {
+  const quest = state.quests.find(q => q.id === questId);
+  if (quest) {
+    addChronicleEvent(`🗑️ Removed bounty: "${quest.text}"`);
+  }
   state.quests = state.quests.filter(q => q.id !== questId);
   notify();
 }
@@ -619,36 +856,43 @@ export function deleteQuest(questId) {
 export function claimPendingLoginBonus(dungeonId = "woods") {
   if (!state.profile.hasPendingLoginBonus) return null;
 
-  // Generate procedurally compiled treasure chest item
-  const lootItem = generateProceduralLoot(dungeonId);
-  state.inventory.backpack.push(lootItem);
+  // Grant Gold & Materials only (no items!)
+  state.profile.gold += 150;
+  state.progression.materials.essence += 30;
+  state.progression.materials.relicShards += 3;
 
-  // Create a dedicated premium daily log-in bonus item
-  const loginBonusItem = {
-    id: `item-login-bonus-${Date.now()}`,
-    name: "[Epic] Emblem of Consistency",
-    slot: "offHand",
-    rarity: "Epic",
-    rarityColor: "var(--ruby-crimson)",
-    stats: { attack: 1, defense: 3, speed: 2, intelligence: 1, wisdom: 1 },
-    goldValue: 120,
-    icon: `<svg viewBox="0 0 100 100" style="width:100%; height:100%; fill:var(--ruby-crimson); stroke:var(--ink-charcoal); stroke-width:3px;"><circle cx="50" cy="50" r="35" fill="var(--gold-primary)" /><path d="M50 20 L60 40 L80 40 L65 55 L70 75 L50 62 L30 75 L35 55 L20 40 L40 40 Z" fill="var(--ruby-crimson)" /></svg>`
-  };
-  state.inventory.backpack.push(loginBonusItem);
-
-  // Grant 100 bonus gold
-  state.profile.gold += 100;
-  
   // Set flag false
   state.profile.hasPendingLoginBonus = false;
   
+  addChronicleEvent(`🎁 Claimed Guild Daily Tribute: +150 Gold, +30 Essence, +3 Relic Shards!`);
   notify();
-  return { item: lootItem, loginBonusItem, gold: 100 };
+  return { gold: 150, essence: 30, relicShards: 3 };
 }
 
 export function clearPendingLevelUp() {
   state.profile.pendingLevelUp = null;
   notify();
+}
+
+export function claimWeeklySummary() {
+  const summary = state.profile.lastWeekSummary;
+  state.profile.hasPendingWeeklySummary = false;
+  state.profile.lastWeekSummary = null;
+  notify();
+  return summary;
+}
+
+export function updateHeroName(name) {
+  if (name && name.trim()) {
+    state.profile.name = name.trim();
+    addChronicleEvent(`📝 Hero renamed to ${state.profile.name}.`);
+    notify();
+  }
+}
+
+export function resetSave() {
+  localStorage.removeItem(SAVE_KEY);
+  window.location.reload();
 }
 
 function checkForLevelUps(oldLvlSum, oldSkillsLevels, oldCombatStats) {
@@ -695,6 +939,13 @@ function checkForLevelUps(oldLvlSum, oldSkillsLevels, oldCombatStats) {
         statsList.push(`❤️ maximum health increased by ${hpDiff}`);
       }
 
+      const levelUpText = `🌟 Level Up! ${skillEmojis[skill]} reached Level ${newLvl}!`;
+      addChronicleEvent(levelUpText);
+      
+      if (state.profile.weeklyStats && !state.profile.weeklyStats.skillsLeveled.includes(skill)) {
+        state.profile.weeklyStats.skillsLeveled.push(skill);
+      }
+
       state.profile.pendingLevelUp = {
         title: `Your ${skillEmojis[skill]} level is now ${newLvl}!`,
         icon: skill === 'strength' ? '⚔️' : skill === 'cleaning' ? '🧹' : skill === 'wisdom' ? '📖' : '✨',
@@ -704,7 +955,7 @@ function checkForLevelUps(oldLvlSum, oldSkillsLevels, oldCombatStats) {
     }
   }
 
-  // 2. Check if total Level leveled up
+  // 2. Check if total Level (Character Level) leveled up
   if (state.profile.totalLevel > oldLvlSum) {
     const totalDiff = state.profile.totalLevel - oldLvlSum;
     const statsList = [`🏆 total level increased by ${totalDiff}`];
@@ -729,8 +980,11 @@ function checkForLevelUps(oldLvlSum, oldSkillsLevels, oldCombatStats) {
       statsList.push(`❤️ maximum health increased by ${hpDiff}`);
     }
 
+    const charLvlUpText = `🏆 Character Level increased to ${state.profile.totalLevel}!`;
+    addChronicleEvent(charLvlUpText);
+
     state.profile.pendingLevelUp = {
-      title: `Congratulations! Total Level increased to ${state.profile.totalLevel}!`,
+      title: `Congratulations! Character Level increased to ${state.profile.totalLevel}!`,
       icon: '🏆',
       statsList: statsList
     };
@@ -741,39 +995,78 @@ function checkForLevelUps(oldLvlSum, oldSkillsLevels, oldCombatStats) {
    RPG Progression Action Creators
    ========================================================================== */
 
-export function changeClass(className) {
+export function changeClass(className, isInitialSetup = false) {
   if (!state.progression) return;
   state.progression.currentClass = className;
+  addChronicleEvent(`⚔️ Class Evolution: Evolved into a ${className}!`);
+  
+  if (!isInitialSetup) {
+    const classObj = CLASS_PATHS.find(c => c.name === className);
+    if (classObj) {
+      state.profile.pendingClassAdvancement = {
+        className: className,
+        tier: classObj.tier,
+        ability: classObj.ability
+      };
+    }
+  }
+
   recalculateDerivedStats();
   notify();
 }
 
-export function upgradeCore(coreName) {
-  if (!state.progression) return false;
-  const currentRank = state.progression.coreRanks[coreName] || 0;
-  if (currentRank >= 10) return false; // Max rank
+export function clearPendingClassAdvancement() {
+  state.profile.pendingClassAdvancement = null;
+  notify();
+}
 
-  // Upgrading costs
-  const essenceCost = currentRank * 10 || 5;
-  const fragCost = currentRank * 2 || 1;
+export function switchWeapon(weaponKey) {
+  if (!state.progression) return;
+  state.progression.equippedWeapon = weaponKey;
+  const name = WEAPON_PRESETS[weaponKey]?.name || "Fists";
+  addChronicleEvent(`⚔️ Equipped Weapon: Swapped active weapon to ${name}!`);
+  recalculateDerivedStats();
+  notify();
+}
 
-  if (state.progression.materials.essence >= essenceCost &&
-      state.progression.materials.coreFragments >= fragCost) {
-    state.progression.materials.essence -= essenceCost;
-    state.progression.materials.coreFragments -= fragCost;
-    state.progression.coreRanks[coreName] = currentRank + 1;
-    recalculateDerivedStats();
-    notify();
-    return true;
+export function investEssence(amount) {
+  if (!state.progression.armorForge) {
+    state.progression.armorForge = { level: 1, essenceInvested: 0 };
   }
+  const level = state.progression.armorForge.level;
+  if (level >= 10) return false;
+
+  const cost = getArmorForgeUpgradeCost(level);
+  const maxCanInvest = cost - state.progression.armorForge.essenceInvested;
+  const toInvest = Math.min(amount, maxCanInvest, state.progression.materials.essence);
+
+  if (toInvest <= 0) return false;
+
+  state.progression.materials.essence -= toInvest;
+  state.progression.armorForge.essenceInvested += toInvest;
+
+  let message = `Invested ${toInvest} Essence into the Armor Forge.`;
+
+  if (state.progression.armorForge.essenceInvested >= cost) {
+    state.progression.armorForge.level++;
+    state.progression.armorForge.essenceInvested = 0;
+    const newTier = ARMOR_TIERS[state.progression.armorForge.level - 1] || "Plate";
+    message += ` 🛡️ Upgraded to ${newTier}!`;
+    addChronicleEvent(`🛡️ Armor Forge Upgraded: Reached Level ${state.progression.armorForge.level} (${newTier})!`);
+  }
+
+  recalculateDerivedStats();
+  notify();
+  return { success: true, message };
+}
+
+export function upgradeCore(coreName) {
+  // kept as stub for core compatibility
   return false;
 }
 
 export function equipCore(coreName) {
-  if (!state.progression) return;
-  state.progression.equippedCore = coreName;
-  recalculateDerivedStats();
-  notify();
+  // kept as stub
 }
 
 export function craftRelic(relicId, costEssence, costShards) {
@@ -785,6 +1078,7 @@ export function craftRelic(relicId, costEssence, costShards) {
     state.progression.materials.essence -= costEssence;
     state.progression.materials.relicShards -= costShards;
     state.progression.unlockedRelics.push(relicId);
+    addChronicleEvent(`💍 Crafted Relic: Forged ${relicId}!`);
     notify();
     return true;
   }
@@ -794,6 +1088,7 @@ export function craftRelic(relicId, costEssence, costShards) {
 export function equipRelic(relicId) {
   if (!state.progression) return;
   state.progression.equippedRelic = relicId;
+  addChronicleEvent(`💍 Equipped Relic: Active relic is now ${relicId}.`);
   recalculateDerivedStats();
   notify();
 }
@@ -804,6 +1099,12 @@ export function incrementCodexKill(monsterName) {
     state.progression.monsterCodex[monsterName] = 0;
   }
   state.progression.monsterCodex[monsterName]++;
+  
+  const kills = state.progression.monsterCodex[monsterName];
+  if (kills === 10 || kills === 100 || kills === 1000) {
+    addChronicleEvent(`👾 Codex Milestone: Defeated ${monsterName} ${kills} times! Buff unlocked!`);
+  }
+  
   recalculateDerivedStats();
   notify();
 }
@@ -819,9 +1120,15 @@ export function incrementWeaponMasteryXP(weaponKey, xpAmount) {
   state.progression.weaponXP[weaponKey] += xpAmount;
   
   const newRank = weaponRankForXp(state.progression.weaponXP[weaponKey]);
+  const leveledUp = newRank > oldRank;
+  
+  if (leveledUp) {
+    addChronicleEvent(`🎉 Weapon Mastery: ${weaponKey.toUpperCase()} reached Rank ${newRank}!`);
+  }
   
   recalculateDerivedStats();
   notify();
   
-  return { leveledUp: newRank > oldRank, newRank };
+  return { leveledUp, newRank };
 }
+

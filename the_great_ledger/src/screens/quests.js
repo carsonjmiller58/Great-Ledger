@@ -2,7 +2,8 @@
    Quests View (Bounty Board / Habit Tracker) - The Great Ledger
    ========================================================================== */
 
-import { getState, completeQuest, getMomentumMultiplier, createCustomQuest } from '../state.js';
+import { getState, completeQuest, getMomentumMultiplier, createCustomQuest, generateUpgradeQuest } from '../state.js';
+import { xpForLevel, levelForXp } from '../formulas.js';
 
 export function renderQuests(container) {
   const state = getState();
@@ -19,9 +20,14 @@ export function renderQuests(container) {
       </div>
 
       <!-- Add New Custom Quest Panel -->
-      <button class="btn-primary full-width-btn" id="btn-open-quest-modal">
-        ➕ Post New Custom Bounty
-      </button>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn-primary full-width-btn" id="btn-open-quest-modal">
+          ➕ Post New Custom Bounty
+        </button>
+        <button class="btn-primary full-width-btn" id="btn-generate-upgrade-quest" style="background: var(--sapphire-blue);">
+          🎯 Generate Class Upgrade Quest
+        </button>
+      </div>
 
       <!-- Active Quests List -->
       <div class="quest-section-header">🛡️ Daily Quests</div>
@@ -73,7 +79,7 @@ export function renderQuests(container) {
   `;
 
   // Custom Inline Styles for Quests View
-  injectQuestsCSS();
+  // CSS moved to styles.css
 
   // Populate Lists
   const dailyList = container.querySelector('#daily-quest-list');
@@ -107,6 +113,7 @@ function populateQuests(quests, listContainer, mult) {
     return;
   }
 
+  const state = getState();
   const skillEmojis = {
     strength: '⚔️',
     agility: '🏃',
@@ -122,22 +129,76 @@ function populateQuests(quests, listContainer, mult) {
     const xpReward = Math.floor(quest.baseXP * mult);
     const goldReward = Math.floor(quest.baseGold * mult);
     const emoji = skillEmojis[quest.mappedSkill] || '🛡️';
+    
+    const isCompleted = quest.completedCount > 0;
+    const cardClass = isCompleted ? 'quest-card quest-completed-today' : 'quest-card';
+    const btnAttr = isCompleted ? 'disabled' : '';
+    const btnLabel = isCompleted ? '✅ Done' : 'Complete';
+    
+    let timerHtml = '';
+    if (isCompleted && !quest.isOneTime) {
+      const now = new Date();
+      let resetMs = 0;
+      if (quest.type === 'daily') {
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0,0,0,0);
+        resetMs = tomorrow - now;
+      } else if (quest.type === 'weekly') {
+        const d = new Date(now);
+        d.setDate(d.getDate() + ((7 - d.getDay() + 1) % 7 || 7));
+        d.setHours(0,0,0,0);
+        resetMs = d - now;
+      }
+      const hrs = Math.floor(resetMs / (1000 * 60 * 60));
+      const mins = Math.floor((resetMs % (1000 * 60 * 60)) / (1000 * 60));
+      timerHtml = `<div class="quest-reset-timer">Resets in ${hrs}h ${mins}m</div>`;
+    }
+    
+    let streakHtml = '';
+    if (quest.currentStreak > 1) {
+      streakHtml = `<span class="streak-badge">🔥 ${quest.currentStreak}-day streak</span>`;
+    }
+    
+    const currentXp = state.skills[quest.mappedSkill] || 0;
+    const currentLevel = levelForXp(currentXp);
+    const xpForCurrent = xpForLevel(currentLevel);
+    const xpForNext = xpForLevel(currentLevel + 1);
+    const progressTotal = xpForNext - xpForCurrent;
+    const progressCurrent = currentXp - xpForCurrent;
+    const pct = Math.min(100, Math.max(0, (progressCurrent / progressTotal) * 100));
+    
+    const xpBarHtml = `
+      <div class="quest-xp-bar-row">
+        <div class="quest-xp-bar-track">
+          <div class="quest-xp-bar-fill" style="width: ${pct}%"></div>
+        </div>
+        <span class="quest-xp-bar-label">${currentXp}/${xpForNext}</span>
+      </div>
+    `;
 
     return `
-      <div class="parchment-card quest-card" data-id="${quest.id}">
-        <div class="quest-card-left">
-          <div class="skill-indicator" title="Skill Mapped">
-            <span class="emoji-icon">${emoji}</span>
-            <span class="skill-name">${quest.mappedSkill}</span>
+      <div class="parchment-card ${cardClass}" data-id="${quest.id}">
+        <div class="quest-card-top">
+          <div class="quest-card-left">
+            <div class="skill-indicator" title="Skill Mapped">
+              <span class="emoji-icon">${emoji}</span>
+              <span class="skill-name">${quest.mappedSkill}</span>
+            </div>
+            <div class="quest-text">${quest.text}</div>
+            <div class="quest-meta-row">
+              <div class="quest-stats">Completed: <strong>${quest.completedCount}</strong></div>
+              ${streakHtml}
+              ${timerHtml}
+            </div>
+            ${xpBarHtml}
           </div>
-          <div class="quest-text">${quest.text}</div>
-          <div class="quest-stats">Completed: <strong>${quest.completedCount}</strong></div>
+          <button class="btn-quest-complete" title="Claim Rewards" ${btnAttr}>
+            <div class="reward-tag xp-reward">+${xpReward} XP</div>
+            <div class="reward-tag gold-reward">+${goldReward}g</div>
+            <span class="claim-label">${btnLabel}</span>
+          </button>
         </div>
-        <button class="btn-quest-complete" title="Claim Rewards">
-          <div class="reward-tag xp-reward">+${xpReward} XP</div>
-          <div class="reward-tag gold-reward">+${goldReward}g</div>
-          <span class="claim-label">Complete</span>
-        </button>
       </div>
     `;
   }).join('');
@@ -185,9 +246,17 @@ function setupEventListeners(container) {
   const btnOpen = container.querySelector('#btn-open-quest-modal');
   const btnCancel = container.querySelector('#modal-btn-cancel');
   const btnSubmit = container.querySelector('#modal-btn-submit');
+  const btnGenerateUpgrade = container.querySelector('#btn-generate-upgrade-quest');
 
   btnOpen.addEventListener('click', () => modal.classList.remove('hidden'));
   btnCancel.addEventListener('click', () => modal.classList.add('hidden'));
+  
+  if (btnGenerateUpgrade) {
+    btnGenerateUpgrade.addEventListener('click', () => {
+      generateUpgradeQuest();
+      renderQuests(container); // Refresh the UI immediately to show new quest
+    });
+  }
 
   btnSubmit.addEventListener('click', () => {
     const text = container.querySelector('#modal-quest-text').value.trim();
@@ -269,191 +338,3 @@ function triggerFireParticles(cardElement) {
   }
 }
 
-function injectQuestsCSS() {
-  if (document.getElementById('quests-view-styles')) return;
-  const style = document.createElement('style');
-  style.id = 'quests-view-styles';
-  style.innerHTML = `
-    .description-text {
-      font-size: 0.8rem;
-      line-height: 1.4;
-      color: var(--ink-muted);
-      margin-top: 4px;
-    }
-    .full-width-btn {
-      width: 100%;
-      margin: 8px 0;
-      font-size: 0.9rem !important;
-      padding: 10px 0 !important;
-    }
-    .quest-section-header {
-      font-family: var(--font-header);
-      font-weight: 700;
-      font-size: 0.9rem;
-      letter-spacing: 0.5px;
-      color: var(--ink-charcoal);
-      border-left: 3px solid var(--gold-primary);
-      padding-left: 8px;
-      margin-bottom: 8px;
-    }
-    .quest-list {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .empty-quest-msg {
-      text-align: center;
-      padding: 20px;
-      font-size: 0.8rem;
-      color: var(--ink-muted);
-      border: 1px dashed rgba(44, 37, 30, 0.2);
-      border-radius: 8px;
-    }
-    .quest-card {
-      padding: 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      transition: all 0.3s ease;
-    }
-    .quest-card-left {
-      flex-grow: 1;
-      padding-right: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .skill-indicator {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-family: var(--font-header);
-      font-weight: 700;
-      font-size: 0.6rem;
-      text-transform: uppercase;
-      color: var(--sapphire-blue);
-    }
-    .quest-text {
-      font-size: 0.88rem;
-      font-weight: 600;
-      line-height: 1.3;
-    }
-    .quest-stats {
-      font-size: 0.72rem;
-      color: var(--ink-muted);
-    }
-    .btn-quest-complete {
-      background-color: var(--emerald-green);
-      color: var(--parchment-light);
-      border: var(--border-hand-ink);
-      border-radius: 8px;
-      padding: 6px 12px;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      box-shadow: 0 3px 0 var(--ink-charcoal);
-      transition: all 0.1s ease;
-    }
-    .btn-quest-complete:active {
-      transform: translateY(3px);
-      box-shadow: none;
-    }
-    .reward-tag {
-      font-size: 0.58rem;
-      font-weight: 700;
-      line-height: 1;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.1);
-    }
-    .xp-reward { color: var(--parchment-light); }
-    .gold-reward { color: var(--gold-glow); }
-    .claim-label {
-      font-family: var(--font-header);
-      font-size: 0.65rem;
-      font-weight: 700;
-      margin-top: 2px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .quest-checked {
-      transform: scale(0.97);
-      opacity: 0.6;
-      border-color: var(--emerald-light);
-      background-color: rgba(59, 96, 67, 0.05);
-    }
-    .quest-burn-out {
-      animation: burn-out 0.75s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
-      border-color: #ff4500 !important;
-      box-shadow: 0 0 20px #ff4500, inset 0 0 15px #ff8c00 !important;
-      background: linear-gradient(rgba(255, 69, 0, 0.15), rgba(255, 140, 0, 0.05)) !important;
-    }
-    @keyframes burn-out {
-      0% { transform: scale(1) rotate(0deg); opacity: 1; filter: none; }
-      30% { transform: scale(1.08) rotate(2deg); opacity: 0.95; filter: sepia(0.5) hue-rotate(-20deg) saturate(2.5) contrast(1.2); }
-      100% { transform: scale(0.05) translateY(-85px) rotate(-25deg); opacity: 0; filter: sepia(1) saturate(5) contrast(3.5); }
-    }
-
-    /* Modal Styling */
-    .modal-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background-color: rgba(10, 8, 5, 0.6);
-      backdrop-filter: blur(4px);
-      z-index: 200;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      padding: 20px;
-    }
-    .modal-overlay.hidden {
-      display: none;
-    }
-    .modal-content {
-      width: 100%;
-      max-width: 400px;
-      animation: zoom-in 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-    }
-    .form-group {
-      margin-bottom: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .form-group label {
-      font-family: var(--font-header);
-      font-size: 0.65rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--ink-muted);
-    }
-    .form-group input, .form-group select {
-      font-family: var(--font-body);
-      font-size: 0.85rem;
-      padding: 8px;
-      border: var(--border-hand-ink);
-      border-radius: 8px;
-      background-color: var(--parchment-light);
-      color: var(--ink-charcoal);
-    }
-    .form-group input:focus, .form-group select:focus {
-      outline: none;
-      border-color: var(--gold-primary);
-      box-shadow: 0 0 6px var(--gold-glow);
-    }
-    .modal-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-      margin-top: 18px;
-    }
-    @keyframes zoom-in {
-      from { transform: scale(0.9); opacity: 0; }
-      to { transform: scale(1); opacity: 1; }
-    }
-  `;
-  document.head.appendChild(style);
-}

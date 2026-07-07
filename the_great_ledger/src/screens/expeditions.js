@@ -1,9 +1,5 @@
-/* ==========================================================================
-   Active Focus Expedition and Combat View - The Great Ledger
-   ========================================================================== */
-
-import { getState, getDerivedStats, updateActiveExpedition, completeExpedition, terminateExpeditionGracefully } from '../state.js';
-import { rollCombatTick, generateProceduralLoot, DUNGEONS, getWeaponMasteryKey } from '../formulas.js';
+import { getState, getDerivedStats, updateActiveExpedition, completeExpedition, terminateExpeditionGracefully, startExpedition } from '../state.js';
+import { rollCombatTick, DUNGEONS, getWeaponMasteryKey, WEAPON_PRESETS } from '../formulas.js';
 
 let timerInterval = null;
 let encounterInterval = null;
@@ -18,20 +14,85 @@ export function renderExpedition(container) {
   const state = getState();
   const derived = getDerivedStats();
 
-  // Reset active variables for fresh view
-  cleanupTimers();
-  currentMonster = null;
-  lastVisibilityChange = 0;
-
+  // If expedition is NOT active, show the countdown setup screen
   if (!state.expedition.active) {
-    // If somehow landed here without an active expedition, fallback
-    container.innerHTML = `<div class="empty-quest-msg">No active expedition. Go to Journey map first!</div>`;
+    const selectedDungeonId = state.expedition.selectedDungeonId || 'woods';
+    const dungeon = DUNGEONS.find(d => d.id === selectedDungeonId) || DUNGEONS[0];
+
+    // Reset setup variables safely
+    cleanupTimers();
+    currentMonster = null;
+    lastVisibilityChange = 0;
+
+    container.innerHTML = `
+      <div class="expedition-screen setup-view">
+        <div class="parchment-card header-banner" style="border-color: ${dungeon.color}; display: flex; flex-direction: column; gap: 4px;">
+          <h1 class="card-title" style="margin-bottom:4px; font-size:1.1rem; color: ${dungeon.color}">${dungeon.icon} Deep Focus Journey</h1>
+          <p class="description-text">
+            Prepare your mind. Selected Destination: <strong style="color: ${dungeon.color}">${dungeon.name}</strong> (${dungeon.biome}).
+          </p>
+          
+          <div class="selected-dungeon-card" style="border: 1px dashed rgba(44,37,30,0.15); border-radius: 8px; padding: 10px; margin-top: 6px; background-color: rgba(0,0,0,0.01); text-align: left;">
+            <div style="font-family: var(--font-header); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; color: ${dungeon.color};">${dungeon.icon} ${dungeon.name}</div>
+            <div style="font-size: 0.72rem; color: var(--ink-muted); margin-top: 2px; line-height: 1.3;">${dungeon.description}</div>
+            <div style="font-size: 0.6rem; color: var(--ruby-crimson); font-weight: 700; margin-top: 4px;">Recommended Level: ${dungeon.levelRequirement}</div>
+          </div>
+
+          <button class="btn-secondary full-width-btn" id="btn-switch-destination" style="margin-top: 8px;">🗺️ Switch Destination</button>
+        </div>
+
+        <div class="parchment-card focus-timer-box" style="padding: 16px;">
+          <div class="clock-display" style="margin: 10px auto;">
+            <svg class="radial-ring" viewBox="0 0 100 100">
+              <circle class="ring-track" cx="50" cy="50" r="45"></circle>
+              <circle id="ring-fill" class="ring-fill" cx="50" cy="50" r="45" style="stroke:${dungeon.color}"></circle>
+            </svg>
+            <div class="clock-labels">
+              <span id="timer-countdown">00:10</span>
+              <span id="timer-goal-label">10s Goal</span>
+            </div>
+          </div>
+
+          <div class="duration-selectors" id="timer-presets" style="margin-bottom: 12px;">
+            <button class="btn-secondary btn-preset active" data-sec="600">⏱️ 10 Mins</button>
+            <button class="btn-secondary btn-preset" data-sec="1500">⏱️ 25 Mins</button>
+            <button class="btn-secondary btn-preset" data-sec="3000">⏱️ 50 Mins</button>
+            <button class="btn-secondary btn-preset" id="btn-timer-indefinite" data-sec="-1">♾️ Indefinite</button>
+            <button class="btn-secondary" id="btn-timer-custom-toggle">⏱️ Custom</button>
+          </div>
+
+          <div id="custom-time-input-box" class="custom-time-box hidden" style="margin-bottom: 12px;">
+            <label class="custom-label">Custom Focus Minutes:</label>
+            <div class="custom-input-row">
+              <input type="number" id="custom-minutes-input" min="1" max="180" value="15" />
+              <button class="btn-secondary" id="btn-timer-custom-set">Set</button>
+            </div>
+          </div>
+
+          <button class="btn-primary full-width-btn" id="btn-focus-start" style="font-size: 0.95rem; padding: 12px; margin-top: 4px;">⚔️ Ignite Focus Session</button>
+        </div>
+      </div>
+
+      <!-- Destination selector overlay -->
+      <div id="destination-selector-overlay" class="modal-overlay hidden">
+        <div class="parchment-card modal-content" style="max-height: 80vh; overflow-y: auto; width: 90%; max-width: 400px; padding: 16px;">
+          <h2 class="card-title" style="margin-bottom: 10px;">🗺️ Choose Destination</h2>
+          <div class="dungeon-list-box" style="display: flex; flex-direction: column; gap: 8px;">
+            ${renderDungeonsSelectorList(state.profile.steps, state.profile.totalLevel)}
+          </div>
+          <button class="btn-secondary full-width-btn" id="btn-close-destination" style="margin-top: 12px;">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    // CSS moved to styles.css
+    setupSetupViewListeners(container, selectedDungeonId);
     return;
   }
 
+  // ACTIVE EXPEDITION RUNNING VIEW
   const dungeon = DUNGEONS.find(d => d.id === state.expedition.dungeonId) || DUNGEONS[0];
 
-  // Screen Scaffolding
   container.innerHTML = `
     <div class="expedition-screen strike-parent" style="border-color:${dungeon.color}">
       
@@ -60,32 +121,12 @@ export function renderExpedition(container) {
           </svg>
           <div class="clock-labels">
             <span id="timer-countdown">00:00</span>
-            <span id="timer-goal-label">Set Focus Goal</span>
-          </div>
-        </div>
-
-        <!-- Timer Duration Selectors -->
-        <div class="duration-selectors" id="timer-presets">
-          <button class="btn-secondary btn-preset active" data-sec="10">⏱️ Demo (10s)</button>
-          <button class="btn-secondary btn-preset" data-sec="600">⏱️ 10 Mins</button>
-          <button class="btn-secondary btn-preset" data-sec="1500">⏱️ 25 Mins</button>
-          <button class="btn-secondary btn-preset" data-sec="3000">⏱️ 50 Mins</button>
-          <button class="btn-secondary btn-preset" id="btn-timer-indefinite" data-sec="-1">♾️ Indefinite</button>
-          <button class="btn-secondary" id="btn-timer-custom-toggle">⏱️ Custom</button>
-        </div>
-
-        <!-- Custom Focus Time Input Row -->
-        <div id="custom-time-input-box" class="custom-time-box hidden">
-          <label class="custom-label">Custom Focus Minutes:</label>
-          <div class="custom-input-row">
-            <input type="number" id="custom-minutes-input" min="1" max="180" value="15" />
-            <button class="btn-secondary" id="btn-timer-custom-set">Set</button>
+            <span id="timer-goal-label">Focusing...</span>
           </div>
         </div>
 
         <div class="timer-controls">
-          <button class="btn-primary" id="btn-focus-start">🔥 Ignite Focus</button>
-          <button class="btn-primary hidden" id="btn-summon-boss" disabled>👑 Summon Boss (Focus 5s)</button>
+          <button class="btn-primary hidden" id="btn-summon-boss">👑 Summon Boss!</button>
           <button class="btn-secondary btn-flee" id="btn-focus-abandon">🏳️ Retreat</button>
         </div>
       </div>
@@ -94,7 +135,7 @@ export function renderExpedition(container) {
       <div id="battle-hud" class="parchment-card battle-hud hidden">
         <div class="hud-halves">
           <div class="hud-hero">
-            <span class="hud-avatar">⚔️ Hero</span>
+            <span class="hud-avatar">⚔️ ${state.profile.name}</span>
             <div class="hud-hp-bar">
               <div id="hud-hero-hp" class="hp-fill fill-green" style="width:100%"></div>
             </div>
@@ -115,32 +156,142 @@ export function renderExpedition(container) {
 
       <!-- Right: Real-time scrolling medieval logs -->
       <div class="combat-scroll-box parchment-card">
-        <h4 class="card-title">📖 Adventure Chronicle</h4>
+        <h4 class="card-title">📖 Active Combat logs</h4>
         <div class="log-viewport scroll-container" id="log-viewport-box"></div>
       </div>
 
     </div>
   `;
 
-  injectExpeditionCSS();
+  // CSS moved to styles.css
 
   // Elements
   const logBox = container.querySelector('#log-viewport-box');
   const timerCount = container.querySelector('#timer-countdown');
   const ringFill = container.querySelector('#ring-fill');
-  const btnStart = container.querySelector('#btn-focus-start');
   const btnAbandon = container.querySelector('#btn-focus-abandon');
-  const presets = container.querySelector('#timer-presets');
   const battleHud = container.querySelector('#battle-hud');
 
   // Load starting logs
   renderLogs(state.expedition.logs, logBox);
 
-  // Set default countdown target to 10s (Demo)
-  let selectedSeconds = 10;
-  isIndefiniteMode = false; // Reset to false
-  timerCount.textContent = "00:10";
+  // Set initial countdown ring offset
   setRadialProgress(1);
+
+  // Bind Retreat abandon button
+  btnAbandon.addEventListener('click', () => {
+    let modal = container.querySelector('#retreat-modal-overlay');
+    const isIndefinite = targetTime === Infinity;
+    
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'retreat-modal-overlay';
+      modal.className = 'modal-overlay hidden';
+      modal.style.cssText = 'position: fixed; z-index: 200; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px);';
+      
+      const titleText = isIndefinite ? "Conclude Expedition?" : "Retreat?";
+      const descText = isIndefinite ? 
+        "Are you ready to safely conclude your indefinite journey? You will keep 100% of the spoils you have collected so far." :
+        "Are you sure you want to retreat to safety? You will drop most unbanked materials and suffer a momentum penalty.";
+      const btnColor = isIndefinite ? "var(--emerald-green)" : "var(--ruby-crimson)";
+      const btnText = isIndefinite ? "Conclude Safely" : "Retreat";
+
+      modal.innerHTML = `
+        <div class="parchment-card" style="width: 320px; padding: 24px; text-align: center;">
+          <h2 style="color: ${btnColor}; margin-top: 0; font-family: var(--font-header);">${titleText}</h2>
+          <p style="margin-bottom: 24px; font-size: 0.9rem; color: var(--ink-base);">${descText}</p>
+          <div style="display: flex; gap: 12px;">
+            <button id="btn-retreat-cancel" class="btn-secondary" style="flex: 1;">Cancel</button>
+            <button id="btn-retreat-confirm" class="btn-primary" style="flex: 1; background: ${btnColor};">${btnText}</button>
+          </div>
+        </div>
+      `;
+      container.appendChild(modal);
+      
+      modal.querySelector('#btn-retreat-cancel').addEventListener('click', () => {
+        modal.classList.add('hidden');
+      });
+      
+      modal.querySelector('#btn-retreat-confirm').addEventListener('click', () => {
+        modal.classList.add('hidden');
+        cleanupTimers();
+        if (isIndefinite) {
+          import('../state.js').then(mod => {
+            mod.completeExpedition();
+            renderExpeditionReport(container, dungeon, true);
+          });
+        } else {
+          import('../state.js').then(mod => {
+            mod.terminateExpeditionGracefully("Retreated from dungeon.");
+            mod.notify(); // Wait, let's just use import logic without duplicate switchScreen
+            import('../app.js').then(appMod => appMod.switchScreen('quests'));
+          });
+        }
+      });
+    }
+    modal.classList.remove('hidden');
+  });
+
+  // Start active clocks
+  startVisualTimers(container, dungeon, logBox, derived);
+  setupVisibilityDetector();
+}
+
+function renderDungeonsSelectorList(steps, level) {
+  return DUNGEONS.map(dungeon => {
+    const isStepUnlocked = steps >= dungeon.stepRequirement;
+    const isLevelUnlocked = level >= dungeon.levelRequirement;
+    const isUnlocked = isStepUnlocked && isLevelUnlocked;
+
+    if (!isUnlocked) {
+      return `
+        <div class="dungeon-select-row locked" style="opacity: 0.65; border: 1px dashed rgba(44,37,30,0.3); padding: 8px 10px; border-radius: 8px; background-color: rgba(0,0,0,0.02); text-align: left;">
+          <strong style="font-size: 0.72rem; color: var(--ruby-crimson);">🔒 Locked: ${dungeon.name}</strong>
+          <div style="font-size: 0.58rem; color: var(--ink-muted); margin-top: 2px;">
+            👣 Steps: ${steps.toLocaleString()} / ${dungeon.stepRequirement.toLocaleString()} | 🛡️ Lvl: ${level}/${dungeon.levelRequirement}
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="dungeon-select-row unlocked" data-id="${dungeon.id}" style="border: 1px solid ${dungeon.color}; padding: 8px 10px; border-radius: 8px; cursor: pointer; background-color: rgba(0,0,0,0.01); text-align: left; transition: transform 0.1s ease;">
+        <div style="font-family: var(--font-header); font-size: 0.76rem; font-weight: 700; color: ${dungeon.color};">${dungeon.icon} ${dungeon.name}</div>
+        <div style="font-size: 0.65rem; color: var(--ink-muted); margin-top: 1px; line-height: 1.25;">${dungeon.description}</div>
+        <div style="font-size: 0.58rem; color: var(--emerald-green); font-weight: 700; margin-top: 4px;">Rec. Lvl: ${dungeon.levelRequirement} | XP: ${dungeon.baseXPMultiplier.toFixed(2)}x, Gold: ${dungeon.baseGoldMultiplier.toFixed(2)}x</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function setupSetupViewListeners(container, selectedDungeonId) {
+  const modal = container.querySelector('#destination-selector-overlay');
+  const btnOpen = container.querySelector('#btn-switch-destination');
+  const btnClose = container.querySelector('#btn-close-destination');
+  const timerCount = container.querySelector('#timer-countdown');
+  const ringFill = container.querySelector('#ring-fill');
+  const btnStart = container.querySelector('#btn-focus-start');
+  const presets = container.querySelector('#timer-presets');
+
+  let selectedSeconds = 600;
+  isIndefiniteMode = false;
+
+  btnOpen.addEventListener('click', () => modal.classList.remove('hidden'));
+  btnClose.addEventListener('click', () => modal.classList.add('hidden'));
+
+  // Switch destination selections
+  container.querySelectorAll('.dungeon-select-row.unlocked').forEach(row => {
+    row.addEventListener('click', () => {
+      const dungeonId = row.getAttribute('data-id');
+      import('../state.js').then(mod => {
+        const state = mod.getState();
+        state.expedition.selectedDungeonId = dungeonId;
+        mod.saveState();
+        modal.classList.add('hidden');
+        renderExpedition(container);
+      });
+    });
+  });
 
   // Presets listeners
   presets.querySelectorAll('.btn-preset').forEach(btn => {
@@ -150,29 +301,24 @@ export function renderExpedition(container) {
       if (customToggle) customToggle.classList.remove('active');
       btn.classList.add('active');
       
-      // Hide custom input box
       container.querySelector('#custom-time-input-box').classList.add('hidden');
-      
       selectedSeconds = parseInt(btn.getAttribute('data-sec'));
       
       if (selectedSeconds === -1) {
-        // Indefinite Mode stopwatch counts up
         isIndefiniteMode = true;
         timerCount.textContent = "00:00";
         container.querySelector('#timer-goal-label').textContent = "Indefinite Focus";
-        setRadialProgress(1);
       } else {
         isIndefiniteMode = false;
         const m = Math.floor(selectedSeconds / 60);
         const s = selectedSeconds % 60;
         timerCount.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
         container.querySelector('#timer-goal-label').textContent = `${m > 0 ? m + ' Mins' : selectedSeconds + 's'} Goal`;
-        setRadialProgress(1);
       }
     });
   });
 
-  // Custom Time handlers
+  // Custom Toggle handlers
   const btnCustomToggle = container.querySelector('#btn-timer-custom-toggle');
   const customInputBox = container.querySelector('#custom-time-input-box');
   const customInput = container.querySelector('#custom-minutes-input');
@@ -188,7 +334,6 @@ export function renderExpedition(container) {
     selectedSeconds = mins * 60;
     timerCount.textContent = `${mins.toString().padStart(2,'0')}:00`;
     container.querySelector('#timer-goal-label').textContent = `${mins} Mins Goal`;
-    setRadialProgress(1);
   });
 
   btnCustomSet.addEventListener('click', () => {
@@ -197,155 +342,135 @@ export function renderExpedition(container) {
     isIndefiniteMode = false;
     timerCount.textContent = `${mins.toString().padStart(2,'0')}:00`;
     container.querySelector('#timer-goal-label').textContent = `${mins} Mins Goal`;
-    setRadialProgress(1);
   });
 
-  // ignite focus
+  // Start Focus Session
   btnStart.addEventListener('click', () => {
-    // Hide presets, show combat hud
-    presets.classList.add('hidden');
-    customInputBox.classList.add('hidden');
-    btnStart.classList.add('hidden');
-    
-    if (isIndefiniteMode) {
-      const btnSummon = container.querySelector('#btn-summon-boss');
-      if (btnSummon) {
-        btnSummon.classList.remove('hidden');
-        btnSummon.disabled = true;
-        btnSummon.textContent = "👑 Summon Boss (Focus 5s)";
+    import('../state.js').then(mod => {
+      // Start state expedition
+      mod.startExpedition(selectedDungeonId);
+      
+      if (isIndefiniteMode) {
+        targetTime = Infinity;
+        timeRemaining = 0;
+      } else {
+        targetTime = selectedSeconds * 1000;
+        timeRemaining = targetTime;
       }
-    }
-    
-    battleHud.classList.remove('hidden');
-    container.querySelector('#timer-goal-label').textContent = isIndefiniteMode ? "INDEFINITE EXPEDITION UNDERWAY" : "EXPEDITION UNDERWAY";
-
-    // Initialize countdown timers
-    if (isIndefiniteMode) {
-      targetTime = Infinity;
-      timeRemaining = 0;
-    } else {
-      targetTime = selectedSeconds * 1000;
-      timeRemaining = targetTime;
-    }
-    timeElapsed = 0;
-    lastVisibilityChange = Date.now(); // Start visibility tracker on ignite
-
-    startVisualTimers(container, dungeon, logBox, derived);
+      timeElapsed = 0;
+      lastVisibilityChange = Date.now();
+      
+      // Re-render view to the active combat layout
+      renderExpedition(container);
+    });
   });
-
-  // Summon Boss listener
-  const btnSummon = container.querySelector('#btn-summon-boss');
-  btnSummon.addEventListener('click', () => {
-    btnSummon.classList.add('hidden');
-    appendLog(`👑 Boss Summoned! The dread boss chamber opens...`, logBox);
-    cleanupTimers();
-    triggerCombatEncounter(container, dungeon, true, logBox, derived);
-  });
-
-  // Retreat abandonment listener
-  btnAbandon.addEventListener('click', () => {
-    const confirmRetreat = confirm("Are you sure you want to retreat to safety? You will drop all loot chests found and suffer a momentum penalty!");
-    if (confirmRetreat) {
-      cleanupTimers();
-      terminateExpeditionGracefully("Retreated from dungeon.");
-      import('../app.js').then(mod => mod.switchScreen('quests'));
-    }
-  });
-
-  // Anti-Distraction Screen Visibility Observers
-  setupVisibilityDetector();
 }
 
 function startVisualTimers(container, dungeon, logBox, derived) {
   const timerCount = container.querySelector('#timer-countdown');
   const ringFill = container.querySelector('#ring-fill');
-  const steps = targetTime / 1000;
   
-  // Fast frequency ticks for demo vs slow frequency for Mins
-  const isDemo = steps === 10;
+  const isDemo = targetTime === 10000;
   const tickDuration = 1000;
-  const combatIntervalSec = isDemo ? 2 : 45; // Combat rolls occur fast in demo!
+  const combatIntervalSec = 45; // Standard encounter rate
 
   appendLog(`🔥 Focus ignited! You prepare to cross the thresholds...`, logBox);
 
-  timerInterval = setInterval(() => {
-    // Award weapon XP every 5 seconds (5 XP)
-    if (timeElapsed > 0 && timeElapsed % 5000 === 0) {
-      const mainHand = getState().inventory.equipped.mainHand;
-      if (mainHand) {
-        const wKey = getWeaponMasteryKey(mainHand.name);
-        if (wKey) {
-          import('../state.js').then(mod => {
-            const res = mod.incrementWeaponMasteryXP(wKey, 5);
-            if (res && res.leveledUp) {
-              appendLog(`🎉 Weapon Mastery Leveled Up! Your ${wKey.toUpperCase()} mastery is now Rank ${res.newRank}!`, logBox);
-            }
-          });
-        }
+  // Anchor to absolute system time to survive sleep/backgrounding
+  const startedAt = getState().expedition.startedAt || Date.now();
+  let lastWeaponXpElapsed = 0;
+  let lastSavePointElapsed = 0;
+
+  function updateTimerUI() {
+    const activeExp = getState().expedition;
+    if (!activeExp.active) return;
+    
+    timeElapsed = Date.now() - startedAt;
+
+    // Award weapon XP every 5 seconds reliably based on absolute elapsed time
+    if (timeElapsed - lastWeaponXpElapsed >= 5000) {
+      const numAwards = Math.floor((timeElapsed - lastWeaponXpElapsed) / 5000);
+      lastWeaponXpElapsed += numAwards * 5000;
+      
+      const activeWeaponKey = getState().progression.equippedWeapon || "blade";
+      if (activeWeaponKey) {
+        import('../state.js').then(mod => {
+          const res = mod.incrementWeaponMasteryXP(activeWeaponKey, 5 * numAwards);
+          if (res && res.leveledUp) {
+            appendLog(`🎉 Weapon Mastery Leveled Up! Your ${activeWeaponKey.toUpperCase()} mastery is now Rank ${res.newRank}!`, logBox);
+          }
+        });
       }
     }
 
     if (isIndefiniteMode) {
-      timeElapsed += tickDuration;
-      
-      // 1. Update Stopwatch displays
+      // Create a save point every 5 minutes (300,000 ms)
+      if (timeElapsed - lastSavePointElapsed >= 300000) {
+        const numSaves = Math.floor((timeElapsed - lastSavePointElapsed) / 300000);
+        lastSavePointElapsed += numSaves * 300000;
+        
+        import('../state.js').then(mod => {
+          mod.bankExpeditionSpoils();
+          appendLog(`💾 <strong>Save Point Reached!</strong> All spoils collected so far are 100% secured in your ledger.`, logBox);
+        });
+      }
+
+      // stopwatch counts up
       const elapsedSec = Math.floor(timeElapsed / 1000);
       const m = Math.floor(elapsedSec / 60);
       const s = elapsedSec % 60;
       timerCount.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
       
-      // 2. Pulse radial progress ring
       const pulsePct = 1 - ((timeElapsed % 4000) / 4000);
       setRadialProgress(pulsePct, ringFill);
       
-      // 3. Stage Indication (Unlock progressive tags every 30s)
       const stageIdx = Math.min(3, Math.floor(timeElapsed / (30 * 1000)));
       updateActiveExpedition((exp) => {
         exp.stageIndex = stageIdx;
       });
       updateStageDots(container, stageIdx);
       
-      // 4. Enable Summon Boss button after 5s
-      const minThreshold = 5000;
+      const minThreshold = 900000; // 15 minutes to summon boss in indefinite mode
       if (timeElapsed >= minThreshold) {
         const btnSummon = container.querySelector('#btn-summon-boss');
         if (btnSummon && btnSummon.disabled) {
           btnSummon.disabled = false;
+          btnSummon.classList.remove('hidden');
           btnSummon.textContent = "👑 Summon Boss!";
         }
       }
       
     } else {
-      timeRemaining = Math.max(0, timeRemaining - tickDuration);
-      timeElapsed += tickDuration;
+      timeRemaining = Math.max(0, targetTime - timeElapsed);
 
-      // 1. Update Clock Displays
       const remSec = Math.floor(timeRemaining / 1000);
       const m = Math.floor(remSec / 60);
       const s = remSec % 60;
       timerCount.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
       
-      // 2. Adjust Radial Circular Ring
       const pct = timeRemaining / targetTime;
       setRadialProgress(pct, ringFill);
 
-      // 3. Resolve Dynamic Stage Indicators
       const stageIdx = Math.min(3, Math.floor((timeElapsed / targetTime) * 4));
       updateActiveExpedition((exp) => {
         exp.stageIndex = stageIdx;
       });
       updateStageDots(container, stageIdx);
 
-      // 4. Check Focus Goal Completion
       if (timeRemaining <= 0) {
         cleanupTimers();
-        
-        // Boss Battle trigger!
         appendLog(`🏆 Time goal reached! The Boss Chamber opens!`, logBox);
         triggerCombatEncounter(container, dungeon, true, logBox, derived);
       }
     }
-  }, tickDuration);
+  }
+
+  // Export for visibility handler to force immediate updates
+  window._updateExpeditionTimerUI = updateTimerUI;
+  
+  // Initial draw and loop
+  updateTimerUI();
+  timerInterval = setInterval(updateTimerUI, tickDuration);
 
   // Periodic Combat Roll scheduler
   encounterInterval = setInterval(() => {
@@ -356,24 +481,15 @@ function startVisualTimers(container, dungeon, logBox, derived) {
 }
 
 function triggerCombatEncounter(container, dungeon, isBoss, logBox, derived) {
-  // Pull monster configs
   const monsterData = isBoss ? dungeon.boss : dungeon.monsters[Math.floor(Math.random() * dungeon.monsters.length)];
-  currentMonster = { ...monsterData, currentDistance: 5 }; // Start at distance of 5 steps!
+  currentMonster = { ...monsterData, currentDistance: 5, maxHp: monsterData.hp }; // Start at distance of 5 steps!
 
   appendLog(`⚠️ ${isBoss ? '👑 BOSS ENCOUNTER:' : '👾 ENEMY DETECTED:'} A wild ${currentMonster.name} jumps from the shadows! (Distance: 5m)`, logBox);
 
   // Weapon range summary log
-  const mainHand = getState().inventory.equipped.mainHand;
-  let rangeLabel = "1m (Melee)";
-  if (mainHand) {
-    const wName = mainHand.name.toLowerCase();
-    if (wName.includes("bow") || wName.includes("staff") || wName.includes("wand")) {
-      rangeLabel = "5m (Ranged)";
-    } else if (wName.includes("halberd")) {
-      rangeLabel = "2m (Polearm Reach Melee)";
-    }
-  }
-  appendLog(`🛡️ Equipped Weapon Range: ${rangeLabel}.`, logBox);
+  const activeWeaponKey = getState().progression.equippedWeapon || "blade";
+  const preset = WEAPON_PRESETS[activeWeaponKey] || WEAPON_PRESETS.blade;
+  appendLog(`🛡️ Equipped Weapon Range: ${preset.range}m (${preset.name}).`, logBox);
   
   updateBattleHUD(container, currentMonster, derived);
 
@@ -384,20 +500,10 @@ function triggerCombatEncounter(container, dungeon, isBoss, logBox, derived) {
       return;
     }
 
-    // Determine active range based on equipped weapons
-    const mainHand = getState().inventory.equipped.mainHand;
-    let playerRange = 1; // Melee default
-    if (mainHand) {
-      const wName = mainHand.name.toLowerCase();
-      if (wName.includes("bow") || wName.includes("staff") || wName.includes("wand")) {
-        playerRange = 5;
-      } else if (wName.includes("halberd")) {
-        playerRange = 2; // Polearm melee reach
-      }
-    }
+    const playerRange = preset.range;
 
-    // Inject equipped mainHand weapon name temporarily for calculations
-    derived.equippedMainHandName = mainHand ? mainHand.name : "";
+    // Inject equipped weapon name temporarily for calculations
+    derived.equippedMainHandName = preset.name;
     const tick = rollCombatTick(derived, currentMonster, playerRange, getState().progression);
 
     // Print step advance movements
@@ -438,17 +544,38 @@ function triggerCombatEncounter(container, dungeon, isBoss, logBox, derived) {
         exp.logs.push(`💀 Defeated ${currentMonster.name}`);
       });
 
-      // Rarity loot drop check
-      if (isBoss || Math.random() > 0.6) {
-        const item = generateProceduralLoot(dungeon.id);
-        appendLog(`🎁 TREASURE CHEST OPENED! Obtained: <strong style="color:${item.rarityColor}">${item.name}</strong>!`, logBox);
+      // Material loot drop check
+      if (isBoss || Math.random() > 0.5) {
+        const roll = Math.random();
+        let matName = "Essence";
+        let matAmt = Math.floor(Math.random() * 5) + 3; // 3-7
+        let matField = "essence";
+        let emoji = "✨";
+
+        if (isBoss) {
+          matName = "Relic Shard";
+          matAmt = Math.floor(Math.random() * 2) + 1; // 1-2
+          matField = "relicShards";
+          emoji = "🧩";
+        } else if (roll > 0.85) {
+          matName = "Relic Shard";
+          matAmt = 1;
+          matField = "relicShards";
+          emoji = "🧩";
+        } else if (roll > 0.50) {
+          matName = "Core Fragment";
+          matAmt = Math.floor(Math.random() * 2) + 1; // 1-2
+          matField = "coreFragments";
+          emoji = "⚙️";
+        }
+
+        appendLog(`${emoji} loot discovered! Obtained: <strong>+${matAmt} ${matName}</strong>!`, logBox);
         updateActiveExpedition(exp => {
-          exp.rewardsGained.items.push(item);
+          exp.rewardsGained[matField] = (exp.rewardsGained[matField] || 0) + matAmt;
         });
       }
 
       if (isBoss) {
-        // Slain boss completes the focus session victoriously
         appendLog(`🎉 VICTORY! Dungeon cleared successfully. compiling report...`, logBox);
         setTimeout(() => {
           cleanupTimers();
@@ -483,17 +610,14 @@ function updateBattleHUD(container, monster, derived) {
 
   if (enemyHP && monster) {
     container.querySelector('#hud-enemy-name').textContent = monster.name;
-    const enemyPct = Math.max(0, Math.floor((monster.hp / monster.hp) * 100)); // wait: need base HP
-    const baseHP = monster.name === 'Elder Druid Shade' ? 60 : monster.name === 'Gemstone Colossus' ? 90 : 25; // fallback
-    const monsterBaseHp = monster.hp > baseHP ? monster.hp : baseHP;
-    const monsterPct = Math.max(0, Math.floor((monster.hp / monsterBaseHp) * 100));
+    const maxHp = monster.maxHp || monster.hp;
+    const monsterPct = Math.max(0, Math.floor((monster.hp / maxHp) * 100));
     enemyHP.style.width = `${monsterPct}%`;
-    enemyHPTxt.textContent = `HP: ${monster.hp}/${monsterBaseHp}`;
+    enemyHPTxt.textContent = `HP: ${monster.hp}/${maxHp}`;
   }
 }
 
 function setupVisibilityDetector() {
-  // Always clean up first to prevent multiple duplicate active listeners
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   document.addEventListener('visibilitychange', handleVisibilityChange);
 }
@@ -501,23 +625,11 @@ function setupVisibilityDetector() {
 function handleVisibilityChange() {
   const state = getState();
   if (!state.expedition.active) return;
-  if (lastVisibilityChange === 0) return; // Skip if timer hasn't ignited yet
 
-  if (document.hidden) {
-    // Left app! Record timestamp
-    lastVisibilityChange = Date.now();
-  } else {
-    // Returned! Calculate drift
-    const elapsedOffline = Date.now() - lastVisibilityChange;
-    if (elapsedOffline > 15000) { // 15 seconds grace period
-      cleanupTimers();
-      alert("⚠️ Focus Interrupted! You left the app during active focus. Dungeon expedition aborted and momentum flame decayed!");
-      terminateExpeditionGracefully("Interrupted due to distraction.");
-      import('../app.js').then(mod => mod.switchScreen('quests'));
-    } else {
-      // Returned within grace period: reset tracker to prevent accumulation
-      lastVisibilityChange = Date.now();
-    }
+  if (!document.hidden && window._updateExpeditionTimerUI) {
+    // When the screen wakes up or tab is focused, immediately sync the timer 
+    // rather than waiting for the next setInterval tick.
+    window._updateExpeditionTimerUI();
   }
 }
 
@@ -539,7 +651,6 @@ function appendLog(text, box) {
   box.appendChild(line);
   box.scrollTop = box.scrollHeight;
 
-  // Sync to state logs
   updateActiveExpedition(exp => {
     exp.logs.push(text);
   });
@@ -570,21 +681,26 @@ function renderExpeditionReport(container, dungeon, success) {
   const state = getState();
   const kills = getDefeatedEnemiesList(state.expedition.logs);
   
-  // Slashed yields for defeat, full values for win
-  const goldVal = success ? state.expedition.rewardsGained.gold : Math.floor(state.expedition.rewardsGained.gold * 0.35);
-  const xpVal = success ? state.expedition.rewardsGained.xp : Math.floor(state.expedition.rewardsGained.xp * 0.3);
+  const banked = state.expedition.bankedRewards || { gold: 0, xp: 0, essence: 0, coreFragments: 0, relicShards: 0 };
+  const unbanked = state.expedition.rewardsGained || { gold: 0, xp: 0, essence: 0, coreFragments: 0, relicShards: 0 };
+
+  const goldVal = success ? (unbanked.gold + banked.gold) : Math.floor(unbanked.gold * 0.35) + banked.gold;
+  const xpVal = success ? (unbanked.xp + banked.xp) : Math.floor(unbanked.xp * 0.15) + banked.xp;
+  const essenceVal = success ? (unbanked.essence || 0) + banked.essence : Math.floor((unbanked.essence || 0) * 0.35) + banked.essence;
+  const coreVal = success ? (unbanked.coreFragments || 0) + banked.coreFragments : Math.floor((unbanked.coreFragments || 0) * 0.35) + banked.coreFragments;
+  const relicVal = success ? (unbanked.relicShards || 0) + banked.relicShards : Math.floor((unbanked.relicShards || 0) * 0.35) + banked.relicShards;
 
   container.innerHTML = `
     <div class="report-card-overlay parchment-theme">
       <div class="parchment-card report-card">
         <h2 class="card-title" style="color: ${success ? 'var(--emerald-green)' : 'var(--ruby-crimson)'}; font-family: var(--font-header);">
-          ${success ? '🏆 Expedition Cleared!' : '💔 Dungeon Retreat...'}
+          ${success ? '🏆 Expedition Concluded!' : '💔 Dungeon Retreat...'}
         </h2>
         
         <div class="report-scroll">
           <div class="report-meta">
             <strong>Realm Visited:</strong> ${dungeon.icon} ${dungeon.name} <br>
-            <strong>Outcome:</strong> ${success ? 'Dungeon Cleared (100% Explored)' : 'Incapacitated (Rescued)'}
+            <strong>Outcome:</strong> ${success ? 'Dungeon Cleared / Safely Concluded' : 'Incapacitated (Rescued)'}
           </div>
           
           <div class="report-section">
@@ -596,26 +712,18 @@ function renderExpeditionReport(container, dungeon, success) {
 
           <div class="report-section">
             <h4>🪙 Spoils of Adventure</h4>
-            <div class="spoils-grid">
+            <div class="spoils-grid" style="grid-template-columns: repeat(2, 1fr);">
               <div class="spoil-item">✨ <strong>+${xpVal}</strong> Combat XP</div>
               <div class="spoil-item">🪙 <strong>+${goldVal}</strong> Gold Coins</div>
             </div>
           </div>
 
           <div class="report-section">
-            <h4>🎁 Recovered Equipment</h4>
-            <div class="report-loot-items">
-              ${success && state.expedition.rewardsGained.items.length > 0 ? 
-                state.expedition.rewardsGained.items.map(item => `
-                  <div class="report-loot-card" style="border-color:${item.rarityColor}">
-                    <div class="report-loot-icon">${item.icon}</div>
-                    <div class="report-loot-details">
-                      <span class="report-loot-name" style="color:${item.rarityColor}">${item.name.split('] ')[1]}</span>
-                      <span class="report-loot-slot">${item.slot} (${item.rarity})</span>
-                    </div>
-                  </div>
-                `).join('') : `<div class="empty-backpack-msg">${success ? 'No gear drops found' : 'Loot chests lost in retreat'}</div>`
-              }
+            <h4>✨ Upgrade Materials Recovered</h4>
+            <div class="spoils-grid" style="grid-template-columns: repeat(3, 1fr); gap: 6px;">
+              <div class="spoil-item" style="font-size: 0.65rem;">✨ <strong>+${essenceVal}</strong> Essence</div>
+              <div class="spoil-item" style="font-size: 0.65rem;">⚙️ <strong>+${coreVal}</strong> Fragments</div>
+              <div class="spoil-item" style="font-size: 0.65rem;">🧩 <strong>+${relicVal}</strong> Shards</div>
             </div>
           </div>
         </div>
@@ -653,354 +761,3 @@ function getDefeatedEnemiesList(logs) {
   return list;
 }
 
-function injectExpeditionCSS() {
-  if (document.getElementById('expedition-view-styles')) return;
-  const style = document.createElement('style');
-  style.id = 'expedition-view-styles';
-  style.innerHTML = `
-    .expedition-screen {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    
-    /* Stage Progression Dots */
-    .stage-tracker {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0 10px;
-    }
-    .stage-dot {
-      font-size: 0.6rem;
-      font-weight: 700;
-      color: var(--ink-muted);
-      border: var(--border-hand-ink);
-      background-color: var(--parchment-dark);
-      padding: 2px 6px;
-      border-radius: 4px;
-      text-transform: uppercase;
-      font-family: var(--font-header);
-    }
-    .stage-dot.active {
-      background-color: var(--gold-primary);
-      color: var(--parchment-light);
-      box-shadow: 0 0 6px var(--gold-glow);
-    }
-    .stage-connector {
-      flex-grow: 1;
-      height: 2px;
-      background-color: var(--ink-charcoal);
-      margin: 0 4px;
-    }
-
-    /* Focus Timer box */
-    .focus-timer-box {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 10px;
-    }
-    .dungeon-title-bar {
-      font-family: var(--font-header);
-      font-weight: 900;
-      font-size: 0.85rem;
-      letter-spacing: 0.5px;
-      margin-bottom: 8px;
-    }
-    .clock-display {
-      width: 140px;
-      height: 140px;
-      position: relative;
-      margin-bottom: 8px;
-    }
-    .radial-ring {
-      width: 100%;
-      height: 100%;
-      transform: rotate(-90deg);
-    }
-    .ring-track {
-      fill: none;
-      stroke: rgba(0,0,0,0.06);
-      stroke-width: 6;
-    }
-    .ring-fill {
-      fill: none;
-      stroke-width: 6;
-      stroke-linecap: round;
-      transition: stroke-dashoffset 1s linear;
-    }
-    .clock-labels {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-    }
-    #timer-countdown {
-      font-size: 1.6rem;
-      font-weight: 700;
-      font-family: var(--font-header);
-      line-height: 1;
-    }
-    #timer-goal-label {
-      font-size: 0.58rem;
-      font-weight: 700;
-      color: var(--ink-muted);
-      text-transform: uppercase;
-      margin-top: 2px;
-    }
-    .duration-selectors {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
-      width: 100%;
-      margin-bottom: 8px;
-    }
-    .custom-time-box {
-      width: 100%;
-      background-color: rgba(0,0,0,0.03);
-      padding: 8px 12px;
-      border-radius: 8px;
-      border: 1px dashed rgba(44, 37, 30, 0.1);
-      margin-bottom: 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .custom-label {
-      font-family: var(--font-header);
-      font-size: 0.6rem;
-      font-weight: 700;
-      color: var(--ink-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .custom-input-row {
-      display: flex;
-      gap: 8px;
-    }
-    .custom-input-row input {
-      flex-grow: 1;
-      font-family: var(--font-body);
-      font-size: 0.85rem;
-      padding: 4px 8px;
-      border: var(--border-hand-ink);
-      border-radius: 6px;
-      background-color: var(--parchment-light);
-      color: var(--ink-charcoal);
-    }
-    .custom-input-row button {
-      padding: 2px 10px !important;
-      font-size: 0.72rem !important;
-    }
-    .btn-preset {
-      font-size: 0.72rem !important;
-      padding: 4px 0 !important;
-    }
-    .btn-preset.active {
-      background-color: var(--sapphire-blue);
-      color: var(--parchment-light);
-    }
-    .timer-controls {
-      display: flex;
-      gap: 10px;
-      width: 100%;
-    }
-    .timer-controls button {
-      flex-grow: 1;
-    }
-
-    /* Battle Stats HUD */
-    .battle-hud {
-      padding: 8px 12px;
-    }
-    .hud-halves {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .versus-icon {
-      font-family: var(--font-header);
-      font-weight: 900;
-      font-size: 0.9rem;
-      color: var(--ruby-crimson);
-      animation: pulse-flame 0.5s infinite alternate;
-    }
-    .hud-hero, .hud-enemy {
-      width: 42%;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-    .hud-hero { align-items: flex-start; }
-    .hud-enemy { align-items: flex-end; }
-    .hud-avatar {
-      font-family: var(--font-header);
-      font-weight: 700;
-      font-size: 0.7rem;
-    }
-    .hud-hp-bar {
-      width: 100%;
-      height: 6px;
-      background-color: rgba(0,0,0,0.1);
-      border: 1px solid var(--ink-charcoal);
-      border-radius: 3px;
-      overflow: hidden;
-    }
-    .hp-fill {
-      height: 100%;
-      transition: width 0.3s ease;
-    }
-    .fill-green { background-color: var(--emerald-light); }
-    .fill-red { background-color: var(--ruby-light); }
-    .hud-label {
-      font-size: 0.65rem;
-      font-weight: 700;
-    }
-
-    /* Combat Logs view */
-    .combat-scroll-box {
-      flex-grow: 1;
-      display: flex;
-      flex-direction: column;
-      padding: 10px;
-      min-height: 150px;
-    }
-    .log-viewport {
-      flex-grow: 1;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      padding: 4px;
-      background-color: rgba(0, 0, 0, 0.02);
-      border-radius: 6px;
-      border: 1px solid rgba(44, 37, 30, 0.05);
-    }
-    .log-line {
-      font-size: 0.72rem;
-      line-height: 1.4;
-      border-bottom: 1px dashed rgba(44, 37, 30, 0.06);
-      padding-bottom: 4px;
-    }
-    .hidden {
-      display: none !important;
-    }
-
-    /* Expedition Report Card CSS styles */
-    .report-card-overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: var(--parchment-bg);
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      padding: 20px;
-      z-index: 100;
-      animation: zoom-in 0.3s ease-out;
-    }
-    .report-card {
-      width: 100%;
-      height: 100%;
-      max-height: 100%;
-      display: flex;
-      flex-direction: column;
-      padding: 18px;
-    }
-    .report-scroll {
-      flex-grow: 1;
-      width: 100%;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      padding: 4px 0;
-      margin-bottom: 10px;
-    }
-    .report-meta {
-      font-size: 0.8rem;
-      line-height: 1.5;
-      background-color: rgba(0,0,0,0.02);
-      padding: 8px 12px;
-      border-radius: 8px;
-      border: 1px dashed rgba(44, 37, 30, 0.1);
-    }
-    .report-section {
-      border-top: 1px dashed rgba(44, 37, 30, 0.15);
-      padding-top: 10px;
-      margin-top: 4px;
-    }
-    .report-section h4 {
-      font-family: var(--font-header);
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      color: var(--ink-muted);
-      margin-bottom: 6px;
-      letter-spacing: 0.5px;
-    }
-    .report-kills-list {
-      font-size: 0.8rem;
-      line-height: 1.4;
-      color: var(--ink-charcoal);
-    }
-    .spoils-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-    }
-    .spoil-item {
-      background-color: rgba(0,0,0,0.03);
-      padding: 6px;
-      border-radius: 6px;
-      border: 1px dashed rgba(44, 37, 30, 0.1);
-      font-size: 0.75rem;
-      text-align: center;
-    }
-    .report-loot-items {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .report-loot-card {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      background-color: var(--parchment-light);
-      border: var(--border-hand-ink);
-      border-radius: 8px;
-      padding: 6px 10px;
-    }
-    .report-loot-icon {
-      width: 28px;
-      height: 28px;
-    }
-    .report-loot-details {
-      display: flex;
-      flex-direction: column;
-    }
-    .report-loot-name {
-      font-size: 0.78rem;
-      font-weight: 700;
-    }
-    .report-loot-slot {
-      font-size: 0.62rem;
-      color: var(--ink-muted);
-      text-transform: uppercase;
-      font-weight: 600;
-    }
-    .full-width-btn {
-      width: 100%;
-      margin-top: 8px;
-    }
-  `;
-  document.head.appendChild(style);
-}
